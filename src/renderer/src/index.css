@@ -1,0 +1,66 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Nunito', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: #1f2933;
+  -webkit-font-smoothing: antialiased;
+  background:
+    radial-gradient(1100px 700px at 12% -8%, #c7f0d8 0%, transparent 55%),
+    radial-gradient(1000px 760px at 108% 8%, #cdeefb 0%, transparent 55%),
+    linear-gradient(180deg, #dcf0fb 0%, #d3ecf8 50%, #e3f6ec 100%);
+  background-attachment: fixed;
+}
+
+/* Soft floating blobs in the background, like the mockups. */
+.blob {
+  position: fixed;
+  border-radius: 9999px;
+  filter: blur(8px);
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: 0;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(120, 150, 170, 0.35);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl2 bg-white/85 backdrop-blur-sm shadow-clay border border-white/70;
+  }
+  .btn {
+    @apply rounded-2xl px-5 py-3 font-bold transition active:scale-[0.98] disabled:opacity-50;
+  }
+  .btn-soft {
+    @apply btn bg-slate-100/80 text-ink hover:bg-slate-200/80;
+  }
+  .btn-primary {
+    @apply btn bg-mint-ink text-white hover:brightness-105 shadow-clay-sm;
+  }
+  .input {
+    @apply w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-ink outline-none
+           focus:border-mint-ink/60 focus:ring-2 focus:ring-mint-ink/20 transition;
+  }
+}
