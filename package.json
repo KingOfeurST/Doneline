@@ -9,9 +9,9 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "dist": "electron-vite build && electron-builder",
-    "dist:win": "electron-vite build && electron-builder --win",
-    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist": "electron-vite build && electron-builder --publish never",
+    "dist:win": "electron-vite build && electron-builder --win --publish never",
+    "dist:mac": "electron-vite build && electron-builder --mac --publish never",
     "build:mcp": "esbuild mcp/server.ts --bundle --platform=node --format=cjs --packages=external --outfile=out/mcp/server.cjs",
     "mcp": "npm run build:mcp && node out/mcp/server.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
