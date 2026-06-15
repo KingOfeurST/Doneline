@@ -60,8 +60,7 @@
     },
     "mac": {
       "target": "dmg",
-      "category": "public.app-category.productivity",
-      "identity": null
+      "category": "public.app-category.productivity"
     }
   }
 }
