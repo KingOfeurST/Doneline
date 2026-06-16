@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import type { TodoWithGoal } from '../../../shared/api'
+import type { FocusInvite } from '../../../shared/api'
 import { useFocus, formatClock } from '../focus'
 import { useProfile } from '../profile'
+import { usePresence, clockFromSeconds } from '../presence'
 import { CHANNELS } from '../lib/sound'
 import { MOODS, moodById } from '../lib/moods'
 import { randomQuote, type Quote } from '../lib/quotes'
@@ -27,6 +29,7 @@ export default function FocusOverlay() {
 
   if (!f.open) return null
   if (endQuote) return <Ending quote={endQuote} onClear={() => setEndQuote(null)} />
+  if (f.waiting) return <Waiting />
   return f.started ? (
     <Ambient todos={todos} reload={loadTodos} onEnd={() => setEndQuote(randomQuote())} />
   ) : (
@@ -34,10 +37,72 @@ export default function FocusOverlay() {
   )
 }
 
+/* ------------------------------- Waiting ------------------------------- */
+
+function Waiting() {
+  const f = useFocus()
+  const mood = moodById(f.mood)
+  return (
+    <div className="fixed inset-0 z-[90] overflow-hidden" style={{ background: mood.base }}>
+      <FocusCanvas moodId={f.mood} />
+      <div className="relative z-10 flex h-full flex-col items-center justify-center px-6 text-center text-white">
+        <p className="text-5xl" style={{ animation: 'pop 1s ease-in-out infinite alternate' }}>
+          ⏳
+        </p>
+        <p className="mt-4 text-2xl font-extrabold" style={{ textShadow: '0 4px 30px rgba(0,0,0,0.35)' }}>
+          Waiting for your friend to start…
+        </p>
+        <p className="mt-2 text-sm font-bold text-white/70">You'll both begin at the same moment.</p>
+        <style>{`@keyframes pop { 0%{transform:scale(0.9);opacity:0.6} 100%{transform:scale(1.1);opacity:1} }`}</style>
+        <button
+          className="mt-8 rounded-2xl bg-white/15 px-5 py-3 font-bold text-white backdrop-blur transition hover:bg-white/25"
+          onClick={() => {
+            f.setWaiting(false)
+            f.setOpen(false)
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
 /* -------------------------------- Setup -------------------------------- */
 
 function Setup({ todos }: { todos: TodoWithGoal[] }) {
   const f = useFocus()
+  const { friends } = usePresence()
+  const { self, personById } = useProfile()
+  const [invited, setInvited] = useState(false)
+  const [activeInvite, setActiveInvite] = useState<FocusInvite | null>(null)
+
+  useEffect(() => {
+    const check = () => api.presence.activeInvite().then(setActiveInvite)
+    check()
+    const off = api.workspace.onChanged(check)
+    const poll = setInterval(check, 5000)
+    return () => {
+      off()
+      clearInterval(poll)
+    }
+  }, [])
+
+  const hostedAccepted =
+    !!activeInvite && activeInvite.from_person === self && activeInvite.accepted === 1 && !activeInvite.started_at
+  const friendName = activeInvite ? personById(activeInvite.to_person)?.name ?? 'Your friend' : ''
+
+  async function inviteFriend(toId: string) {
+    await api.presence.invite(toId, f.focusMin, f.breakMin)
+    setInvited(true)
+    setTimeout(() => setInvited(false), 2500)
+  }
+
+  async function startTogether() {
+    if (!activeInvite) return f.start()
+    const startedAt = await api.presence.startInvite(activeInvite.id)
+    f.startAnchored(startedAt, activeInvite.focus_min, activeInvite.break_min)
+  }
 
   return (
     <div
@@ -69,7 +134,11 @@ function Setup({ todos }: { todos: TodoWithGoal[] }) {
           <select
             className="input"
             value={f.taskId ?? ''}
-            onChange={(e) => f.setTaskId(e.target.value || null)}
+            onChange={(e) => {
+              const id = e.target.value || null
+              f.setTaskId(id)
+              f.setTaskTitle(todos.find((t) => t.id === id)?.title ?? null)
+            }}
           >
             <option value="">Just focus (no task)</option>
             {todos.map((t) => (
@@ -164,9 +233,33 @@ function Setup({ todos }: { todos: TodoWithGoal[] }) {
           </label>
         </div>
 
-        <button className="btn-primary w-full py-4 text-lg" onClick={f.start}>
-          Start focus · {f.focusMin} min
-        </button>
+        {hostedAccepted ? (
+          <>
+            <p className="rounded-2xl bg-mint-card px-4 py-2 text-center text-sm font-bold text-mint-ink">
+              🎉 {friendName} joined — start when you're ready
+            </p>
+            <button className="btn-primary w-full py-4 text-lg" onClick={startTogether}>
+              Start together · {f.focusMin} min
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn-primary w-full py-4 text-lg" onClick={f.start}>
+              Start focus · {f.focusMin} min
+            </button>
+            {friends.length > 0 && (
+              <button
+                className="btn-soft w-full"
+                onClick={() => inviteFriend(friends[0].person.id)}
+                disabled={invited}
+              >
+                {invited
+                  ? 'Invite sent — waiting for them to join…'
+                  : `Invite ${friends[0].person.emoji} ${friends[0].person.name} to focus together`}
+              </button>
+            )}
+          </>
+        )}
       </div>
 
       <div className="h-8 shrink-0" />
@@ -210,6 +303,8 @@ function Ambient({
   onEnd: () => void
 }) {
   const f = useFocus()
+  const { friends } = usePresence()
+  const focusingFriends = friends.filter((fr) => fr.status === 'focusing')
   const task = todos.find((t) => t.id === f.taskId) || null
   const mood = moodById(f.mood)
 
@@ -217,6 +312,7 @@ function Ambient({
     if (!f.taskId) return
     await api.todos.toggle(f.taskId, true)
     f.setTaskId(null)
+    f.setTaskTitle(null)
     reload()
   }
 
@@ -238,16 +334,51 @@ function Ambient({
 
       {/* timer */}
       <div className="relative z-10 flex h-full flex-col items-center justify-center px-6 text-center text-white">
-        <p className="text-sm font-extrabold uppercase tracking-[0.3em] text-white/70">
-          {f.phase === 'focus' ? 'Focus' : 'Break'}
+        <p className="mb-1 text-xs font-extrabold uppercase tracking-[0.4em] text-white/50">
+          Session {f.round}
         </p>
         <p
-          className="mt-2 text-[7rem] font-extrabold leading-none tabular-nums"
-          style={{ textShadow: '0 4px 30px rgba(0,0,0,0.35)' }}
+          key={f.phase}
+          className="text-sm font-extrabold uppercase tracking-[0.3em] text-white/70"
+          style={{ animation: 'phaseIn 750ms cubic-bezier(0.22, 1, 0.36, 1)' }}
         >
-          {formatClock(f.secondsLeft)}
+          {f.preparing ? 'Get ready' : f.phase === 'focus' ? 'Focus' : 'Break'}
         </p>
+        <style>{`
+          @keyframes phaseIn {
+            0% { opacity: 0; transform: translateY(90px) scale(2.2); }
+            55% { opacity: 1; transform: translateY(40px) scale(1.5); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+          }
+          @keyframes pop {
+            0% { opacity: 0.4; transform: scale(0.7); }
+            100% { opacity: 1; transform: scale(1); }
+          }
+        `}</style>
+        {f.preparing ? (
+          <p
+            key={f.countdown}
+            className="mt-2 text-[9rem] font-extrabold leading-none tabular-nums"
+            style={{ textShadow: '0 4px 30px rgba(0,0,0,0.35)', animation: 'pop 300ms ease-out' }}
+          >
+            {f.countdown}
+          </p>
+        ) : (
+          <p
+            className="mt-2 text-[7rem] font-extrabold leading-none tabular-nums"
+            style={{ textShadow: '0 4px 30px rgba(0,0,0,0.35)' }}
+          >
+            {formatClock(f.secondsLeft)}
+          </p>
+        )}
         {task && <p className="mt-4 max-w-md truncate text-lg font-bold text-white/85">{task.title}</p>}
+
+        {focusingFriends.map((fr) => (
+          <p key={fr.person.id} className="mt-2 text-sm font-bold text-white/70">
+            {fr.person.emoji} {fr.person.name} is focusing too
+            {fr.taskTitle ? ` · ${fr.taskTitle}` : ''} · {clockFromSeconds(fr.secondsLeft)}
+          </p>
+        ))}
 
         {/* controls */}
         <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
@@ -260,6 +391,7 @@ function Ambient({
           <GlassBtn
             onClick={() => {
               f.pause()
+              f.stopMusic()
               onEnd()
             }}
           >

@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { api } from './api'
+import { playClick } from './lib/audioFx'
 import TodayView from './views/TodayView'
 import CalendarView from './views/CalendarView'
 import GoalsView from './views/GoalsView'
@@ -7,6 +9,8 @@ import StartScreen from './components/StartScreen'
 import ProfileSwitcher from './components/ProfileSwitcher'
 import FocusButton from './components/FocusButton'
 import FocusOverlay from './components/FocusOverlay'
+import FocusInvitePrompt from './components/FocusInvitePrompt'
+import PresenceChip from './components/PresenceChip'
 import { ProfileProvider } from './profile'
 import { FocusProvider } from './focus'
 
@@ -22,6 +26,15 @@ const TABS: { id: Tab; label: string }[] = [
 export default function App() {
   const [tab, setTab] = useState<Tab>('today')
   const [started, setStarted] = useState(false)
+
+  // Subtle click feedback on any button press (honors the global mute).
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if ((e.target as HTMLElement)?.closest('button')) playClick()
+    }
+    document.addEventListener('click', onClick)
+    return () => document.removeEventListener('click', onClick)
+  }, [])
 
   if (!started) return <StartScreen onDone={() => setStarted(true)} />
 
@@ -51,7 +64,18 @@ export default function App() {
               ))}
             </nav>
             <div className="flex items-center gap-2">
+              <PresenceChip />
               <FocusButton />
+              <button
+                onClick={() => api.toggleFullscreen()}
+                aria-label="Toggle fullscreen"
+                title="Fullscreen"
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-white/70 text-slate-500 shadow-clay-sm backdrop-blur transition hover:bg-white hover:text-ink"
+              >
+                <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M4 7V4h3M16 7V4h-3M4 13v3h3M16 13v3h-3" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
               <ProfileSwitcher />
             </div>
           </header>
@@ -65,6 +89,7 @@ export default function App() {
         </div>
 
         <FocusOverlay />
+        <FocusInvitePrompt />
       </div>
       </FocusProvider>
     </ProfileProvider>

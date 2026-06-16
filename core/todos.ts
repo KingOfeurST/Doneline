@@ -4,14 +4,14 @@ import { primaryPersonId } from './people.js'
 import type { Todo, TodoWithGoal } from './types.js'
 
 const SELECT_WITH_GOAL = `
-  SELECT t.*, g.title AS goal_title, g.color AS goal_color,
+  SELECT t.*, g.title AS goal_title, g.color AS goal_color, g.shared AS goal_shared,
+         (SELECT GROUP_CONCAT(person_id) FROM todo_completions WHERE todo_id = t.id) AS done_by,
          p.name AS person_name, p.emoji AS person_emoji
   FROM todos t
   LEFT JOIN goals g ON g.id = t.goal_id
   LEFT JOIN people p ON p.id = t.person_id
 `
 
-/** Build a "WHERE person matches" clause. Pass undefined / 'all' for every person. */
 function personClause(personId?: string): { sql: string; args: string[] } {
   if (!personId || personId === 'all') return { sql: '', args: [] }
   return { sql: 't.person_id = ?', args: [personId] }
@@ -22,25 +22,46 @@ function and(...parts: string[]): string {
   return kept.length ? `WHERE ${kept.join(' AND ')}` : ''
 }
 
+// Templates (recurrence set) are rules, not actionable items; archived items are
+// hidden. Normal lists exclude both.
+const VISIBLE = 't.recurrence IS NULL AND t.archived = 0'
+
 export function listTodos(
   opts: { includeCompleted?: boolean; personId?: string } = {}
 ): TodoWithGoal[] {
   const p = personClause(opts.personId)
-  const where = and(opts.includeCompleted ? '' : 't.completed_at IS NULL', p.sql)
+  const where = and(VISIBLE, opts.includeCompleted ? '' : 't.completed_at IS NULL', p.sql)
   const sql = `${SELECT_WITH_GOAL} ${where} ORDER BY t.completed_at IS NOT NULL, t.position, t.created_at`
   return getDb().prepare(sql).all(...p.args) as TodoWithGoal[]
 }
 
-/** Todos that are open or were completed today, plus anything due today. */
+/** Todos open or completed today, plus anything due today. Excludes templates/archived. */
 export function listTodayTodos(dayISO: string, personId?: string): TodoWithGoal[] {
   const p = personClause(personId)
   const where = and(
+    VISIBLE,
     '(t.completed_at IS NULL OR date(t.completed_at) = date(?) OR date(t.due_at) = date(?))',
     p.sql
   )
   const sql = `${SELECT_WITH_GOAL} ${where}
     ORDER BY t.completed_at IS NOT NULL, t.position, t.created_at`
   return getDb().prepare(sql).all(dayISO, dayISO, ...p.args) as TodoWithGoal[]
+}
+
+/** Archived (done, swept) todos, newest first. */
+export function listArchivedTodos(personId?: string): TodoWithGoal[] {
+  const p = personClause(personId)
+  const where = and('t.archived = 1', p.sql)
+  return getDb()
+    .prepare(`${SELECT_WITH_GOAL} ${where} ORDER BY t.completed_at DESC`)
+    .all(...p.args) as TodoWithGoal[]
+}
+
+/** Recurrence templates (the repeat rules). */
+export function listTodoTemplates(): Todo[] {
+  return getDb()
+    .prepare('SELECT * FROM todos WHERE recurrence IS NOT NULL ORDER BY created_at')
+    .all() as Todo[]
 }
 
 export function getTodo(id: string): TodoWithGoal | undefined {
@@ -53,6 +74,8 @@ export function createTodo(input: {
   goal_id?: string | null
   notes?: string | null
   due_at?: string | null
+  recurrence?: string | null
+  recur_parent?: string | null
 }): TodoWithGoal {
   const db = getDb()
   const id = uuid()
@@ -60,7 +83,8 @@ export function createTodo(input: {
     db.prepare('SELECT COALESCE(MAX(position), 0) + 1 AS p FROM todos').get() as { p: number }
   ).p
   db.prepare(
-    'INSERT INTO todos (id, person_id, title, goal_id, notes, due_at, position) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    `INSERT INTO todos (id, person_id, title, goal_id, notes, due_at, position, recurrence, recur_parent)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.person_id || primaryPersonId(),
@@ -68,7 +92,9 @@ export function createTodo(input: {
     input.goal_id ?? null,
     input.notes ?? null,
     input.due_at ?? null,
-    nextPos
+    nextPos,
+    input.recurrence ?? null,
+    input.recur_parent ?? null
   )
   return getTodo(id)!
 }
@@ -94,16 +120,71 @@ export function updateTodo(
   return getTodo(id)
 }
 
-/** Toggle or set completion. Pass `done` to force a state, omit to toggle. */
-export function setTodoDone(id: string, done?: boolean): TodoWithGoal | undefined {
+/**
+ * Toggle or set completion. For a todo under a shared goal, this records the
+ * completion for `selfPersonId` only; the todo is "fully done" (completed_at set)
+ * once every person has completed it.
+ */
+export function setTodoDone(id: string, done?: boolean, selfPersonId?: string): TodoWithGoal | undefined {
+  const db = getDb()
   const cur = getTodo(id)
   if (!cur) return undefined
+
+  if (cur.goal_shared === 1) {
+    const self = selfPersonId || primaryPersonId()
+    const has = db
+      .prepare('SELECT 1 FROM todo_completions WHERE todo_id = ? AND person_id = ?')
+      .get(id, self)
+    const shouldComplete = done === undefined ? !has : done
+    if (shouldComplete) {
+      db.prepare('INSERT OR IGNORE INTO todo_completions (todo_id, person_id) VALUES (?, ?)').run(id, self)
+    } else {
+      db.prepare('DELETE FROM todo_completions WHERE todo_id = ? AND person_id = ?').run(id, self)
+    }
+    const total = (db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n
+    const doneCount = (
+      db.prepare('SELECT COUNT(*) AS n FROM todo_completions WHERE todo_id = ?').get(id) as { n: number }
+    ).n
+    const fullyDone = total > 0 && doneCount >= total
+    db.prepare('UPDATE todos SET completed_at = ? WHERE id = ?').run(
+      fullyDone ? new Date().toISOString() : null,
+      id
+    )
+    return getTodo(id)
+  }
+
   const shouldComplete = done === undefined ? cur.completed_at === null : done
-  const value = shouldComplete ? new Date().toISOString() : null
-  getDb().prepare('UPDATE todos SET completed_at = ? WHERE id = ?').run(value, id)
+  db.prepare('UPDATE todos SET completed_at = ? WHERE id = ?').run(
+    shouldComplete ? new Date().toISOString() : null,
+    id
+  )
   return getTodo(id)
 }
 
 export function deleteTodo(id: string): void {
-  getDb().prepare('DELETE FROM todos WHERE id = ?').run(id)
+  // Deleting a template removes its future instances too.
+  const db = getDb()
+  db.prepare('DELETE FROM todos WHERE id = ? OR recur_parent = ?').run(id, id)
+  db.prepare('DELETE FROM todo_completions WHERE todo_id = ?').run(id)
+}
+
+/** Archive todos completed before `dayISO` (kept in DB, hidden from lists). */
+export function archiveDoneBefore(dayISO: string): number {
+  const r = getDb()
+    .prepare(
+      `UPDATE todos SET archived = 1
+       WHERE archived = 0 AND recurrence IS NULL
+         AND completed_at IS NOT NULL AND date(completed_at) < date(?)`
+    )
+    .run(dayISO)
+  return r.changes as number
+}
+
+/** Permanently delete archived todos completed more than `days` ago. */
+export function purgeArchivedOlderThan(days: number): number {
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString()
+  const r = getDb()
+    .prepare('DELETE FROM todos WHERE archived = 1 AND completed_at IS NOT NULL AND completed_at < ?')
+    .run(cutoff)
+  return r.changes as number
 }

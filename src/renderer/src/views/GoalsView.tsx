@@ -4,6 +4,7 @@ import type { Goal, TodoWithGoal } from '../../../shared/api'
 import { useProfile } from '../profile'
 import Modal from '../components/Modal'
 import TodoRow from '../components/TodoRow'
+import AddTodoModal from '../components/AddTodoModal'
 import { PALETTE } from '../lib/colors'
 
 export default function GoalsView() {
@@ -14,6 +15,8 @@ export default function GoalsView() {
   const [showAdd, setShowAdd] = useState(false)
   const [title, setTitle] = useState('')
   const [color, setColor] = useState(PALETTE[0].value)
+  const [shared, setShared] = useState(false)
+  const [addTodoGoal, setAddTodoGoal] = useState<{ id: string; ownerId: string } | null>(null)
 
   const load = useCallback(async () => {
     setGoals(await api.goals.list({ personId: queryPersonId }))
@@ -26,9 +29,10 @@ export default function GoalsView() {
 
   async function createGoal() {
     if (!title.trim()) return
-    await api.goals.create({ title, color, person_id: defaultOwnerId })
+    await api.goals.create({ title, color, person_id: defaultOwnerId, shared })
     setTitle('')
     setColor(PALETTE[0].value)
+    setShared(false)
     setShowAdd(false)
     load()
   }
@@ -62,23 +66,32 @@ export default function GoalsView() {
       )}
 
       <div className="grid gap-5 md:grid-cols-2">
-        {goals.map((g) => {
+        {goals.map((g, i) => {
           const linked = todos.filter((t) => t.goal_id === g.id)
           const done = linked.filter((t) => t.completed_at).length
           const pct = linked.length ? Math.round((done / linked.length) * 100) : 0
+          const owner = personById(g.person_id)
           return (
-            <section key={g.id} className="card p-6">
+            <section key={g.id} className="card rise lift p-6" style={{ animationDelay: `${i * 60}ms` }}>
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
-                  <span className="h-4 w-4 rounded-full" style={{ background: g.color }} />
-                  <h2 className="flex items-center gap-2 text-xl font-extrabold text-ink">
-                    {combined && (
-                      <span className="text-base" title={personById(g.person_id)?.name ?? ''}>
-                        {personById(g.person_id)?.emoji ?? ''}
-                      </span>
-                    )}
-                    {g.title}
-                  </h2>
+                  {combined && owner ? (
+                    <span
+                      className="flex h-8 w-8 items-center justify-center rounded-full text-base"
+                      style={{ background: owner.color + '22' }}
+                      title={owner.name}
+                    >
+                      {owner.emoji}
+                    </span>
+                  ) : (
+                    <span className="h-4 w-4 rounded-full" style={{ background: g.color }} />
+                  )}
+                  <h2 className="text-xl font-extrabold text-ink">{g.title}</h2>
+                  {g.shared === 1 && (
+                    <span className="rounded-full bg-mint-card px-2 py-0.5 text-xs font-bold text-mint-ink">
+                      👥 Shared
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() => removeGoal(g.id)}
@@ -106,15 +119,20 @@ export default function GoalsView() {
 
               <div className="mt-3">
                 {linked.length === 0 ? (
-                  <p className="py-4 text-sm font-semibold text-slate-400">
-                    No todos linked yet. Set this goal when adding a todo.
-                  </p>
+                  <p className="py-4 text-sm font-semibold text-slate-400">No todos linked yet.</p>
                 ) : (
                   linked.map((t) => (
                     <TodoRow key={t.id} todo={t} onToggle={toggle} onDelete={removeTodo} showOwner={combined} />
                   ))
                 )}
               </div>
+
+              <button
+                className="mt-2 w-full rounded-2xl bg-slate-100/80 py-2.5 text-sm font-bold text-ink transition hover:bg-slate-200/80"
+                onClick={() => setAddTodoGoal({ id: g.id, ownerId: g.person_id })}
+              >
+                + Add todo to this goal
+              </button>
             </section>
           )
         })}
@@ -143,6 +161,10 @@ export default function GoalsView() {
               />
             ))}
           </div>
+          <label className="flex items-center gap-2 rounded-2xl bg-slate-50/70 p-3 text-sm font-bold text-slate-600">
+            <input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} />
+            Shared — every todo must be done by both of you
+          </label>
           <div className="flex justify-end gap-3 pt-2">
             <button className="btn-soft" onClick={() => setShowAdd(false)}>
               Cancel
@@ -153,6 +175,14 @@ export default function GoalsView() {
           </div>
         </div>
       </Modal>
+
+      <AddTodoModal
+        open={addTodoGoal !== null}
+        onClose={() => setAddTodoGoal(null)}
+        onCreated={load}
+        goalId={addTodoGoal?.id}
+        ownerId={addTodoGoal?.ownerId}
+      />
     </div>
   )
 }

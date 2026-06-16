@@ -46,7 +46,9 @@ export function encodeConnectCode(cfg: SyncConfig): string {
 
 export function decodeConnectCode(code: string): SyncConfig | null {
   try {
-    const json = Buffer.from(code.trim(), 'base64').toString('utf8')
+    // Strip any whitespace/line breaks a messaging app may have inserted.
+    const cleaned = code.replace(/\s+/g, '')
+    const json = Buffer.from(cleaned, 'base64').toString('utf8')
     const parsed = JSON.parse(json) as Partial<SyncConfig>
     if (parsed.syncUrl && parsed.authToken) {
       return { syncUrl: parsed.syncUrl, authToken: parsed.authToken }

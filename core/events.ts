@@ -8,10 +8,13 @@ function personFilter(personId?: string): { sql: string; args: string[] } {
   return { sql: 'person_id = ?', args: [personId] }
 }
 
+// Templates (recurrence set) are rules, not dated events — exclude from listings.
+const NOT_TEMPLATE = 'recurrence IS NULL'
+
 export function listEvents(opts: { from?: string; to?: string; personId?: string } = {}): CalEvent[] {
   const db = getDb()
   const p = personFilter(opts.personId)
-  const where: string[] = []
+  const where: string[] = [NOT_TEMPLATE]
   const args: string[] = []
   if (opts.from && opts.to) {
     where.push('starts_at < ? AND ends_at > ?')
@@ -21,9 +24,8 @@ export function listEvents(opts: { from?: string; to?: string; personId?: string
     where.push(p.sql)
     args.push(...p.args)
   }
-  const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
   return db
-    .prepare(`SELECT * FROM events ${clause} ORDER BY all_day DESC, starts_at`)
+    .prepare(`SELECT * FROM events WHERE ${where.join(' AND ')} ORDER BY all_day DESC, starts_at`)
     .all(...args) as CalEvent[]
 }
 
@@ -36,7 +38,7 @@ export function listDayEvents(dayISO: string, personId?: string): CalEvent[] {
   return getDb()
     .prepare(
       `SELECT * FROM events
-       WHERE (
+       WHERE ${NOT_TEMPLATE} AND (
          (all_day = 1 AND date(starts_at) = date(?))
          OR (all_day = 0 AND starts_at <= ? AND ends_at >= ?)
        )${extra}
@@ -47,6 +49,12 @@ export function listDayEvents(dayISO: string, personId?: string): CalEvent[] {
 
 export function getEvent(id: string): CalEvent | undefined {
   return getDb().prepare('SELECT * FROM events WHERE id = ?').get(id) as CalEvent | undefined
+}
+
+export function listEventTemplates(): CalEvent[] {
+  return getDb()
+    .prepare('SELECT * FROM events WHERE recurrence IS NOT NULL ORDER BY created_at')
+    .all() as CalEvent[]
 }
 
 export function createEvent(input: {
@@ -62,14 +70,17 @@ export function createEvent(input: {
   caldav_uid?: string | null
   caldav_etag?: string | null
   caldav_url?: string | null
+  recurrence?: string | null
+  recur_parent?: string | null
   source?: 'local' | 'caldav'
 }): CalEvent {
   const db = getDb()
   const id = uuid()
   db.prepare(
     `INSERT INTO events
-     (id, person_id, title, location, notes, starts_at, ends_at, all_day, color, attendees, caldav_uid, caldav_etag, caldav_url, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     (id, person_id, title, location, notes, starts_at, ends_at, all_day, color, attendees,
+      caldav_uid, caldav_etag, caldav_url, recurrence, recur_parent, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.person_id || primaryPersonId(),
@@ -84,6 +95,8 @@ export function createEvent(input: {
     input.caldav_uid ?? null,
     input.caldav_etag ?? null,
     input.caldav_url ?? null,
+    input.recurrence ?? null,
+    input.recur_parent ?? null,
     input.source || 'local'
   )
   return getEvent(id)!
@@ -95,35 +108,39 @@ export function updateEvent(
 ): CalEvent | undefined {
   const cur = getEvent(id)
   if (!cur) return undefined
-  const merged = { ...cur, ...patch }
+  const m = { ...cur, ...patch }
   getDb()
     .prepare(
       `UPDATE events SET
         person_id = ?, title = ?, location = ?, notes = ?, starts_at = ?, ends_at = ?,
-        all_day = ?, color = ?, attendees = ?, caldav_uid = ?, caldav_etag = ?, caldav_url = ?, source = ?
+        all_day = ?, color = ?, attendees = ?, caldav_uid = ?, caldav_etag = ?, caldav_url = ?,
+        recurrence = ?, recur_parent = ?, source = ?
        WHERE id = ?`
     )
     .run(
-      merged.person_id,
-      merged.title,
-      merged.location,
-      merged.notes,
-      merged.starts_at,
-      merged.ends_at,
-      merged.all_day ? 1 : 0,
-      merged.color,
-      merged.attendees,
-      merged.caldav_uid,
-      merged.caldav_etag,
-      merged.caldav_url,
-      merged.source,
+      m.person_id,
+      m.title,
+      m.location,
+      m.notes,
+      m.starts_at,
+      m.ends_at,
+      m.all_day ? 1 : 0,
+      m.color,
+      m.attendees,
+      m.caldav_uid,
+      m.caldav_etag,
+      m.caldav_url,
+      m.recurrence,
+      m.recur_parent,
+      m.source,
       id
     )
   return getEvent(id)
 }
 
 export function deleteEvent(id: string): void {
-  getDb().prepare('DELETE FROM events WHERE id = ?').run(id)
+  // Deleting a template removes its generated instances too.
+  getDb().prepare('DELETE FROM events WHERE id = ? OR recur_parent = ?').run(id, id)
 }
 
 /** Find a synced event by its CalDAV UID, scoped to one person's calendar. */

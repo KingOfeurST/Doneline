@@ -124,11 +124,14 @@ Restart Claude. You'll get these tools:
 | Tool | What it does |
 | --- | --- |
 | `list_today` | Today's todos + events in one snapshot |
-| `list_todos` / `add_todo` / `complete_todo` / `delete_todo` | Manage todos |
-| `list_goals` / `add_goal` | Manage goals |
-| `list_events` / `add_event` | Manage calendar events |
-| `list_people` | List profiles; pass a `person_id` to other tools to target one |
+| `list_todos` / `add_todo` / `update_todo` / `complete_todo` / `delete_todo` | Manage todos (`add_todo` supports `repeat` daily/weekly) |
+| `list_archived_todos` | See completed/archived todos |
+| `list_goals` / `add_goal` | Manage goals (`shared: true` = both people must complete its todos) |
+| `list_events` / `add_event` | Manage events (multi-day via `ends_at`, plus `repeat`) |
+| `list_people` / `add_person` | Manage profiles; pass a `person_id` to target one |
 | `sync_calendar` | Two-way sync with iCloud |
+| `run_maintenance` | Generate recurring instances + archive done todos |
+| `nudge_friend` | Send a friend an OS-notification nudge |
 
 When a workspace is connected, the MCP server pulls the latest shared data before
 each read and pushes after each write, so Claude always sees current data.

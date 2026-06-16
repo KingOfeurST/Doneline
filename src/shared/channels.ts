@@ -12,6 +12,7 @@ export const CH = {
 
   todosList: 'todos:list',
   todosToday: 'todos:today',
+  todosArchived: 'todos:archived',
   todoCreate: 'todos:create',
   todoUpdate: 'todos:update',
   todoToggle: 'todos:toggle',
@@ -38,6 +39,21 @@ export const CH = {
   notifGet: 'notif:get',
   notifSet: 'notif:set',
   notifTest: 'notif:test',
+
+  maintenanceRun: 'app:maintenance',
+  toggleFullscreen: 'app:toggleFullscreen',
+
+  presenceUpdate: 'presence:update',
+  presenceList: 'presence:list',
+  selfGet: 'presence:selfGet',
+  selfSet: 'presence:selfSet',
+  nudgeSend: 'presence:nudge',
+  inviteSend: 'presence:invite',
+  invitesPending: 'presence:invitesPending',
+  inviteSeen: 'presence:inviteSeen',
+  inviteAccept: 'presence:inviteAccept',
+  inviteStart: 'presence:inviteStart',
+  inviteActive: 'presence:inviteActive',
 
   today: 'app:today'
 } as const

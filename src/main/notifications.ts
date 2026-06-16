@@ -1,6 +1,11 @@
 import { Notification, type BrowserWindow } from 'electron'
 import {
   getNotifPrefs,
+  getSelfPersonId,
+  primaryPersonId,
+  unseenNudgesFor,
+  markNudgeSeen,
+  pendingInvitesFor,
   listEvents,
   listDayEvents,
   listTodos,
@@ -13,6 +18,7 @@ let getWindow: () => BrowserWindow | null = () => null
 
 const notifiedEvents = new Set<string>()
 const notifiedTodos = new Set<string>()
+const notifiedInvites = new Set<string>()
 let morningSentDay = ''
 let appStart = Date.now()
 
@@ -121,4 +127,45 @@ export function stopNotifications(): void {
 
 export function testNotification(): void {
   show('Doneline', 'Notifications are working 🎉')
+}
+
+/** Notify (once) for nudges a friend sent to this device's profile. */
+export function notifyIncomingNudges(getWin: () => BrowserWindow | null): void {
+  try {
+    const self = getSelfPersonId() ?? primaryPersonId()
+    const nudges = unseenNudgesFor(self)
+    if (nudges.length === 0) return
+    getWindow = getWin
+    const people = new Map(listPeople().map((p) => [p.id, p]))
+    for (const n of nudges) {
+      const from = people.get(n.from_person)
+      show(`${from?.emoji ?? '👋'} ${from?.name ?? 'A friend'} nudged you`, n.message)
+      markNudgeSeen(n.id)
+    }
+  } catch (err) {
+    console.error('[doneline] nudge check failed:', err)
+  }
+}
+
+/** Notify (once) for focus-together invites — leaves them unseen so the in-app
+ *  "Join?" prompt still shows until accepted/dismissed. */
+export function notifyIncomingInvites(getWin: () => BrowserWindow | null): void {
+  try {
+    const self = getSelfPersonId() ?? primaryPersonId()
+    const invites = pendingInvitesFor(self)
+    if (invites.length === 0) return
+    getWindow = getWin
+    const people = new Map(listPeople().map((p) => [p.id, p]))
+    for (const inv of invites) {
+      if (notifiedInvites.has(inv.id)) continue
+      notifiedInvites.add(inv.id)
+      const from = people.get(inv.from_person)
+      show(
+        `${from?.emoji ?? '👋'} ${from?.name ?? 'A friend'} wants to focus together`,
+        `Tap Doneline to join a ${inv.focus_min}-min session`
+      )
+    }
+  } catch (err) {
+    console.error('[doneline] invite check failed:', err)
+  }
 }

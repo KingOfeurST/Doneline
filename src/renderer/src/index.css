@@ -46,9 +46,34 @@ body {
   background: transparent;
 }
 
+/* Gentle fade-up entrance for cards and list rows. */
+@keyframes riseIn {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: riseIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise {
+    animation: none;
+  }
+}
+
 @layer components {
   .card {
     @apply rounded-xl2 bg-white/85 backdrop-blur-sm shadow-clay border border-white/70;
+  }
+  /* Opt-in soft hover lift for interactive cards. */
+  .lift {
+    @apply transition duration-200 hover:-translate-y-0.5 hover:shadow-clay;
   }
   .btn {
     @apply rounded-2xl px-5 py-3 font-bold transition active:scale-[0.98] disabled:opacity-50;

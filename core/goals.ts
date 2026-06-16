@@ -20,14 +20,20 @@ export function getGoal(id: string): Goal | undefined {
   return getDb().prepare('SELECT * FROM goals WHERE id = ?').get(id) as Goal | undefined
 }
 
-export function createGoal(input: { title: string; color?: string; person_id?: string }): Goal {
+export function createGoal(input: {
+  title: string
+  color?: string
+  person_id?: string
+  shared?: boolean
+}): Goal {
   const db = getDb()
   const id = uuid()
-  db.prepare('INSERT INTO goals (id, person_id, title, color) VALUES (?, ?, ?, ?)').run(
+  db.prepare('INSERT INTO goals (id, person_id, title, color, shared) VALUES (?, ?, ?, ?, ?)').run(
     id,
     input.person_id || primaryPersonId(),
     input.title.trim(),
-    input.color || '#2f7a4d'
+    input.color || '#2f7a4d',
+    input.shared ? 1 : 0
   )
   return getGoal(id)!
 }

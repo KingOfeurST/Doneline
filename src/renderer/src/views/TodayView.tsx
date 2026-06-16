@@ -7,6 +7,7 @@ import EventCard from '../components/EventCard'
 import AddTodoModal from '../components/AddTodoModal'
 import AddEventModal from '../components/AddEventModal'
 import { fmtDayLabel } from '../lib/format'
+import { playDing } from '../lib/audioFx'
 
 export default function TodayView() {
   const { active, queryPersonId, defaultOwnerId, personById, tick } = useProfile()
@@ -29,7 +30,9 @@ export default function TodayView() {
   }, [load])
 
   async function toggle(id: string) {
+    const wasDone = todos.find((t) => t.id === id)?.completed_at !== null
     await api.todos.toggle(id)
+    if (!wasDone) playDing()
     load()
   }
   async function removeTodo(id: string) {
@@ -50,28 +53,33 @@ export default function TodayView() {
           <h1 className="text-3xl font-extrabold text-ink">Today</h1>
           <p className="font-semibold text-slate-500">{today && fmtDayLabel(today)}</p>
         </div>
-        <p className="text-sm font-bold text-slate-500">
+        <span
+          className={`rounded-full px-3 py-1.5 text-sm font-bold ${
+            openCount === 0 ? 'bg-mint-card text-mint-ink' : 'bg-white/70 text-slate-500'
+          }`}
+        >
           {openCount === 0 ? 'All clear ✨' : `${openCount} to do`}
-        </p>
+        </span>
       </div>
 
       {events.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2">
-          {events.map((e) => {
+          {events.map((e, i) => {
             const p = personById(e.person_id)
             return (
-              <EventCard
-                key={e.id}
-                event={e}
-                onDelete={removeEvent}
-                owner={combined && p ? { emoji: p.emoji, name: p.name } : undefined}
-              />
+              <div key={e.id} className="rise" style={{ animationDelay: `${i * 50}ms` }}>
+                <EventCard
+                  event={e}
+                  onDelete={removeEvent}
+                  owner={combined && p ? { emoji: p.emoji, name: p.name } : undefined}
+                />
+              </div>
             )
           })}
         </div>
       )}
 
-      <section className="card p-7">
+      <section className="card rise p-7" style={{ animationDelay: '80ms' }}>
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-2xl font-extrabold text-ink">Todo</h2>
           <button className="btn-soft py-2 text-sm" onClick={() => setShowEvent(true)}>
@@ -80,9 +88,11 @@ export default function TodayView() {
         </div>
 
         {todos.length === 0 ? (
-          <p className="py-10 text-center font-semibold text-slate-400">
-            Nothing yet. Add your first todo.
-          </p>
+          <div className="py-10 text-center">
+            <p className="text-3xl">🌱</p>
+            <p className="mt-2 font-bold text-slate-500">A fresh start</p>
+            <p className="text-sm font-semibold text-slate-400">Add your first todo below.</p>
+          </div>
         ) : (
           <div>
             {todos.map((t) => (

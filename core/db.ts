@@ -69,6 +69,41 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS presence (
+  person_id  TEXT PRIMARY KEY,
+  status     TEXT NOT NULL DEFAULT 'idle',
+  phase      TEXT,
+  task_title TEXT,
+  ends_at    TEXT,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS nudges (
+  id          TEXT PRIMARY KEY,
+  from_person TEXT NOT NULL,
+  to_person   TEXT NOT NULL,
+  message     TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  seen        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS todo_completions (
+  todo_id      TEXT NOT NULL,
+  person_id    TEXT NOT NULL,
+  completed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (todo_id, person_id)
+);
+
+CREATE TABLE IF NOT EXISTS focus_invites (
+  id          TEXT PRIMARY KEY,
+  from_person TEXT NOT NULL,
+  to_person   TEXT NOT NULL,
+  focus_min   INTEGER NOT NULL,
+  break_min   INTEGER NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  seen        INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(due_at);
 CREATE INDEX IF NOT EXISTS idx_todos_completed ON todos(completed_at);
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(starts_at);
@@ -87,6 +122,20 @@ function migrate(db: DB): void {
   ensureColumn(db, 'todos', 'person_id', 'TEXT')
   ensureColumn(db, 'goals', 'person_id', 'TEXT')
   ensureColumn(db, 'events', 'person_id', 'TEXT')
+
+  // v2: archiving + recurrence.
+  ensureColumn(db, 'todos', 'archived', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'todos', 'recurrence', 'TEXT')
+  ensureColumn(db, 'todos', 'recur_parent', 'TEXT')
+  ensureColumn(db, 'events', 'recurrence', 'TEXT')
+  ensureColumn(db, 'events', 'recur_parent', 'TEXT')
+
+  // v3: shared goals (todos under them require every person to complete).
+  ensureColumn(db, 'goals', 'shared', 'INTEGER NOT NULL DEFAULT 0')
+
+  // v3: co-focus — invite acceptance + a shared start anchor for simultaneous start.
+  ensureColumn(db, 'focus_invites', 'accepted', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'focus_invites', 'started_at', 'TEXT')
 
   // Seed the two default people if the table is empty.
   const count = (db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n

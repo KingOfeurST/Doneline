@@ -22,6 +22,7 @@ const api: DonelineAPI = {
   todos: {
     list: (opts) => ipcRenderer.invoke(CH.todosList, opts),
     today: (day, personId) => ipcRenderer.invoke(CH.todosToday, day, personId),
+    archived: (personId) => ipcRenderer.invoke(CH.todosArchived, personId),
     create: (input) => ipcRenderer.invoke(CH.todoCreate, input),
     update: (id, patch) => ipcRenderer.invoke(CH.todoUpdate, id, patch),
     toggle: (id, done) => ipcRenderer.invoke(CH.todoToggle, id, done),
@@ -61,6 +62,23 @@ const api: DonelineAPI = {
     get: () => ipcRenderer.invoke(CH.notifGet),
     set: (prefs) => ipcRenderer.invoke(CH.notifSet, prefs),
     test: () => ipcRenderer.invoke(CH.notifTest)
+  },
+
+  maintenance: () => ipcRenderer.invoke(CH.maintenanceRun),
+  toggleFullscreen: () => ipcRenderer.invoke(CH.toggleFullscreen),
+
+  presence: {
+    getSelf: () => ipcRenderer.invoke(CH.selfGet),
+    setSelf: (personId) => ipcRenderer.invoke(CH.selfSet, personId),
+    list: () => ipcRenderer.invoke(CH.presenceList),
+    update: (p) => ipcRenderer.invoke(CH.presenceUpdate, p),
+    nudge: (toPerson, message) => ipcRenderer.invoke(CH.nudgeSend, toPerson, message),
+    invite: (toPerson, focusMin, breakMin) => ipcRenderer.invoke(CH.inviteSend, toPerson, focusMin, breakMin),
+    pendingInvites: () => ipcRenderer.invoke(CH.invitesPending),
+    markInviteSeen: (id) => ipcRenderer.invoke(CH.inviteSeen, id),
+    acceptInvite: (id) => ipcRenderer.invoke(CH.inviteAccept, id),
+    startInvite: (id) => ipcRenderer.invoke(CH.inviteStart, id),
+    activeInvite: () => ipcRenderer.invoke(CH.inviteActive)
   }
 }
 

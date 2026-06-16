@@ -12,7 +12,7 @@ export default function EventCard({ event, onDelete, owner }: Props) {
   const color = event.color || '#2f7a4d'
   return (
     <div
-      className="group relative rounded-xl2 border p-5 shadow-clay-sm"
+      className="group relative rounded-xl2 border p-5 shadow-clay-sm transition duration-200 hover:-translate-y-0.5"
       style={{ background: tintFor(color), borderColor: color + '33' }}
     >
       <div className="flex items-start justify-between gap-4">

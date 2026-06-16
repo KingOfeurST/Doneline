@@ -11,6 +11,8 @@ import {
   deleteGoal,
   listTodos,
   listTodayTodos,
+  listArchivedTodos,
+  runMaintenance,
   createTodo,
   updateTodo,
   setTodoDone,
@@ -38,6 +40,18 @@ import {
   isCloud,
   getNotifPrefs,
   setNotifPrefs,
+  getSelfPersonId,
+  setSelfPersonId,
+  primaryPersonId,
+  setPresence,
+  listPresence,
+  sendNudge,
+  sendFocusInvite,
+  pendingInvitesFor,
+  markInviteSeen,
+  acceptInvite,
+  startCoFocus,
+  activeInviteFor,
   type CalDavConfig,
   type SyncConfig,
   type NotifPrefs
@@ -68,9 +82,13 @@ export function registerIpc(onWorkspaceChange: () => void): void {
   ipcMain.handle(CH.todosToday, (_e, day?: string, personId?: string) =>
     listTodayTodos(day ?? localDay(), personId)
   )
+  ipcMain.handle(CH.todosArchived, (_e, personId?: string) => listArchivedTodos(personId))
+  ipcMain.handle(CH.maintenanceRun, () => runMaintenance())
   ipcMain.handle(CH.todoCreate, (_e, input) => createTodo(input))
   ipcMain.handle(CH.todoUpdate, (_e, id, patch) => updateTodo(id, patch))
-  ipcMain.handle(CH.todoToggle, (_e, id, done?: boolean) => setTodoDone(id, done))
+  ipcMain.handle(CH.todoToggle, (_e, id, done?: boolean) =>
+    setTodoDone(id, done, getSelfPersonId() ?? primaryPersonId())
+  )
   ipcMain.handle(CH.todoDelete, (_e, id) => deleteTodo(id))
 
   // Events
@@ -151,4 +169,50 @@ export function registerIpc(onWorkspaceChange: () => void): void {
     testNotification()
     return true
   })
+
+  // Presence & co-focus
+  ipcMain.handle(CH.selfGet, () => getSelfPersonId() ?? primaryPersonId())
+  ipcMain.handle(CH.selfSet, (_e, personId: string) => {
+    setSelfPersonId(personId)
+    return true
+  })
+  ipcMain.handle(CH.presenceList, () => listPresence())
+  ipcMain.handle(
+    CH.presenceUpdate,
+    async (_e, p: { status: 'focusing' | 'idle'; phase?: 'focus' | 'break' | null; task_title?: string | null; ends_at?: string | null }) => {
+      const self = getSelfPersonId() ?? primaryPersonId()
+      setPresence(self, p)
+      await cloudSync().catch(() => {}) // push promptly so the friend sees it
+      return true
+    }
+  )
+  ipcMain.handle(CH.nudgeSend, async (_e, toPerson: string, message: string) => {
+    const self = getSelfPersonId() ?? primaryPersonId()
+    sendNudge(self, toPerson, message)
+    await cloudSync().catch(() => {})
+    return true
+  })
+  ipcMain.handle(CH.inviteSend, async (_e, toPerson: string, focusMin: number, breakMin: number) => {
+    const self = getSelfPersonId() ?? primaryPersonId()
+    sendFocusInvite(self, toPerson, focusMin, breakMin)
+    await cloudSync().catch(() => {})
+    return true
+  })
+  ipcMain.handle(CH.invitesPending, () => pendingInvitesFor(getSelfPersonId() ?? primaryPersonId()))
+  ipcMain.handle(CH.inviteSeen, async (_e, id: string) => {
+    markInviteSeen(id)
+    await cloudSync().catch(() => {})
+    return true
+  })
+  ipcMain.handle(CH.inviteAccept, async (_e, id: string) => {
+    acceptInvite(id)
+    await cloudSync().catch(() => {})
+    return true
+  })
+  ipcMain.handle(CH.inviteStart, async (_e, id: string) => {
+    const startedAt = startCoFocus(id)
+    await cloudSync().catch(() => {})
+    return startedAt
+  })
+  ipcMain.handle(CH.inviteActive, () => activeInviteFor(getSelfPersonId() ?? primaryPersonId()) ?? null)
 }

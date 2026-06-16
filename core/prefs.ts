@@ -37,12 +37,29 @@ export function getNotifPrefs(): NotifPrefs {
 }
 
 export function setNotifPrefs(prefs: NotifPrefs): void {
+  writeMerged({ notifications: { ...DEFAULT_NOTIF_PREFS, ...prefs } })
+}
+
+/** Which workspace profile this device represents (for presence/nudges). */
+export function getSelfPersonId(): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(prefsFile(), 'utf8')) as { selfPersonId?: string }
+    return parsed.selfPersonId ?? null
+  } catch {
+    return null
+  }
+}
+
+export function setSelfPersonId(personId: string): void {
+  writeMerged({ selfPersonId: personId })
+}
+
+function writeMerged(patch: Record<string, unknown>): void {
   let existing: Record<string, unknown> = {}
   try {
     existing = JSON.parse(fs.readFileSync(prefsFile(), 'utf8'))
   } catch {
     /* new file */
   }
-  const merged = { ...existing, notifications: { ...DEFAULT_NOTIF_PREFS, ...prefs } }
-  fs.writeFileSync(prefsFile(), JSON.stringify(merged, null, 2), 'utf8')
+  fs.writeFileSync(prefsFile(), JSON.stringify({ ...existing, ...patch }, null, 2), 'utf8')
 }

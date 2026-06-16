@@ -14,6 +14,8 @@ interface ProfileCtx {
   defaultOwnerId: string | undefined
   /** Look up a person by id. */
   personById: (id: string | null | undefined) => Person | undefined
+  /** This device's own profile id (for mutual todos / presence). */
+  self: string
   /** Increments whenever a background cloud sync brings in new data. Views can
    *  depend on it to refresh. */
   tick: number
@@ -29,6 +31,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
     () => localStorage.getItem(STORAGE_KEY) || 'all'
   )
   const [tick, setTick] = useState(0)
+  const [self, setSelf] = useState('')
 
   const reloadPeople = useCallback(async () => {
     setPeople(await api.people.list())
@@ -36,6 +39,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     reloadPeople()
+    api.presence.getSelf().then(setSelf)
   }, [reloadPeople])
 
   // A background cloud sync may have brought in new data — refresh everything.
@@ -65,7 +69,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   return (
     <Ctx.Provider
-      value={{ people, reloadPeople, active, setActive, queryPersonId, defaultOwnerId, personById, tick }}
+      value={{ people, reloadPeople, active, setActive, queryPersonId, defaultOwnerId, personById, self, tick }}
     >
       {children}
     </Ctx.Provider>

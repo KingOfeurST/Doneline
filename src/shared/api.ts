@@ -5,7 +5,9 @@ import type {
   TodoWithGoal,
   CalEvent,
   CalDavConfig,
-  NotifPrefs
+  NotifPrefs,
+  Presence,
+  FocusInvite
 } from '../../core/index.js'
 
 // Re-export the entity types so the renderer can import them from one place.
@@ -16,7 +18,10 @@ export type {
   TodoWithGoal,
   CalEvent,
   CalDavConfig,
-  NotifPrefs
+  NotifPrefs,
+  Recurrence,
+  Presence,
+  FocusInvite
 } from '../../core/index.js'
 
 export interface SafeCalDavConfig {
@@ -55,7 +60,7 @@ export interface DonelineAPI {
 
   goals: {
     list(opts?: { includeArchived?: boolean; personId?: string }): Promise<Goal[]>
-    create(input: { title: string; color?: string; person_id?: string }): Promise<Goal>
+    create(input: { title: string; color?: string; person_id?: string; shared?: boolean }): Promise<Goal>
     update(id: string, patch: Partial<Pick<Goal, 'title' | 'color' | 'archived'>>): Promise<Goal | undefined>
     remove(id: string): Promise<void>
   }
@@ -63,7 +68,8 @@ export interface DonelineAPI {
   todos: {
     list(opts?: { includeCompleted?: boolean; personId?: string }): Promise<TodoWithGoal[]>
     today(day?: string, personId?: string): Promise<TodoWithGoal[]>
-    create(input: { title: string; person_id?: string; goal_id?: string | null; notes?: string | null; due_at?: string | null }): Promise<TodoWithGoal>
+    archived(personId?: string): Promise<TodoWithGoal[]>
+    create(input: { title: string; person_id?: string; goal_id?: string | null; notes?: string | null; due_at?: string | null; recurrence?: string | null }): Promise<TodoWithGoal>
     update(id: string, patch: Partial<Pick<Todo, 'title' | 'goal_id' | 'notes' | 'due_at' | 'position' | 'person_id'>>): Promise<TodoWithGoal | undefined>
     toggle(id: string, done?: boolean): Promise<TodoWithGoal | undefined>
     remove(id: string): Promise<void>
@@ -82,9 +88,37 @@ export interface DonelineAPI {
       notes?: string | null
       color?: string
       attendees?: string | null
+      recurrence?: string | null
     }): Promise<CalEvent>
     update(id: string, patch: Partial<Omit<CalEvent, 'id' | 'created_at'>>): Promise<CalEvent | undefined>
     remove(id: string): Promise<void>
+  }
+
+  /** Generate recurring instances, archive yesterday's done todos, purge old ones. */
+  maintenance(): Promise<{ archived: number; purged: number }>
+
+  /** Toggle the OS window fullscreen; resolves to the new fullscreen state. */
+  toggleFullscreen(): Promise<boolean>
+
+  presence: {
+    /** This device's profile id (defaults to the primary profile). */
+    getSelf(): Promise<string>
+    setSelf(personId: string): Promise<boolean>
+    list(): Promise<Presence[]>
+    update(p: {
+      status: 'focusing' | 'idle'
+      phase?: 'focus' | 'break' | null
+      task_title?: string | null
+      ends_at?: string | null
+    }): Promise<boolean>
+    nudge(toPerson: string, message: string): Promise<boolean>
+    invite(toPerson: string, focusMin: number, breakMin: number): Promise<boolean>
+    pendingInvites(): Promise<FocusInvite[]>
+    markInviteSeen(id: string): Promise<boolean>
+    acceptInvite(id: string): Promise<boolean>
+    /** Host starts the shared session; resolves to the shared start timestamp. */
+    startInvite(id: string): Promise<string>
+    activeInvite(): Promise<FocusInvite | null>
   }
 
   caldav: {

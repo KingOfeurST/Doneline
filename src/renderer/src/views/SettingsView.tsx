@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import type { CalendarInfo, SafeCalDavConfig, Person, WorkspaceStatus, NotifPrefs } from '../../../shared/api'
+import type { CalendarInfo, SafeCalDavConfig, Person, WorkspaceStatus, NotifPrefs, TodoWithGoal } from '../../../shared/api'
 import { useProfile } from '../profile'
 import { PALETTE } from '../lib/colors'
+import { isMuted, setMuted, playDing } from '../lib/audioFx'
 
 const DEFAULT_SERVER = 'https://caldav.icloud.com'
 const EMOJIS = ['🙂', '🧑', '👩', '👨', '🐱', '🐶', '🌟', '🦊', '🐻', '🦄']
@@ -15,10 +16,115 @@ export default function SettingsView() {
       <h1 className="text-3xl font-extrabold text-ink">Settings</h1>
       <WorkspaceSection />
       <NotificationsSection />
+      <SoundsSection />
       <PeopleSection people={people} reload={reloadPeople} />
+      <IdentitySection people={people} />
       <CalendarSection people={people} initialPerson={active === 'all' ? people[0]?.id : active} />
+      <ArchiveSection />
       <ClaudeSection />
     </div>
+  )
+}
+
+/* ------------------------------ Identity ------------------------------ */
+
+function IdentitySection({ people }: { people: Person[] }) {
+  const [self, setSelf] = useState('')
+
+  useEffect(() => {
+    api.presence.getSelf().then(setSelf)
+  }, [])
+
+  function choose(id: string) {
+    setSelf(id)
+    api.presence.setSelf(id)
+  }
+
+  return (
+    <section className="card p-7">
+      <h2 className="text-xl font-extrabold text-ink">This is me</h2>
+      <p className="mb-3 mt-1 text-sm font-semibold text-slate-500">
+        Which profile are you on this device? Used for co-focus presence and nudges — your
+        friend sets theirs on their own machine.
+      </p>
+      <select className="input" value={self} onChange={(e) => choose(e.target.value)}>
+        {people.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.emoji} {p.name}
+          </option>
+        ))}
+      </select>
+    </section>
+  )
+}
+
+/* ------------------------------- Sounds ------------------------------- */
+
+function SoundsSection() {
+  const [on, setOn] = useState(!isMuted())
+
+  function toggle(v: boolean) {
+    setOn(v)
+    setMuted(!v)
+    if (v) playDing() // little preview
+  }
+
+  return (
+    <section className="card p-7">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-extrabold text-ink">Sounds</h2>
+          <p className="mt-1 text-sm font-semibold text-slate-500">
+            Check-off dings, focus chimes, last-5-second ticks, and subtle clicks.
+          </p>
+        </div>
+        <Toggle checked={on} onChange={toggle} />
+      </div>
+    </section>
+  )
+}
+
+/* ------------------------------ Archive ------------------------------- */
+
+function ArchiveSection() {
+  const [items, setItems] = useState<TodoWithGoal[]>([])
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    if (open) api.todos.archived().then(setItems)
+  }, [open])
+
+  return (
+    <section className="card space-y-3 p-7">
+      <button className="flex w-full items-center justify-between" onClick={() => setOpen((o) => !o)}>
+        <div className="text-left">
+          <h2 className="text-xl font-extrabold text-ink">Archive</h2>
+          <p className="mt-1 text-sm font-semibold text-slate-500">
+            Completed todos move here at midnight and are kept for 14 days, then removed.
+          </p>
+        </div>
+        <span className="text-slate-400">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open &&
+        (items.length === 0 ? (
+          <p className="py-4 text-center text-sm font-semibold text-slate-400">Nothing archived yet.</p>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {items.map((t) => (
+              <div key={t.id} className="flex items-center justify-between py-2.5">
+                <span className="truncate font-bold text-slate-500 line-through">
+                  {t.person_emoji ? `${t.person_emoji} ` : ''}
+                  {t.title}
+                </span>
+                <span className="ml-3 shrink-0 text-xs font-semibold text-slate-400">
+                  {t.completed_at ? new Date(t.completed_at).toLocaleDateString() : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+    </section>
   )
 }
 

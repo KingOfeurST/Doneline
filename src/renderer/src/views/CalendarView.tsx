@@ -15,6 +15,7 @@ import { api } from '../api'
 import type { CalEvent } from '../../../shared/api'
 import { useProfile } from '../profile'
 import AddEventModal from '../components/AddEventModal'
+import DayDetailModal from '../components/DayDetailModal'
 import { localDateInput, fmtTime } from '../lib/format'
 
 type Mode = 'month' | 'week'
@@ -27,6 +28,7 @@ export default function CalendarView() {
   const [events, setEvents] = useState<CalEvent[]>([])
   const [showEvent, setShowEvent] = useState(false)
   const [pickDate, setPickDate] = useState<string | undefined>()
+  const [detailDay, setDetailDay] = useState<string | null>(null)
 
   const range = useMemo(() => {
     if (mode === 'week') {
@@ -66,9 +68,8 @@ export default function CalendarView() {
     setCursor((c) => (mode === 'week' ? addWeeks(c, dir) : addMonths(c, dir)))
   }
 
-  function addOn(day: Date) {
-    setPickDate(localDateInput(day))
-    setShowEvent(true)
+  function openDay(day: Date) {
+    setDetailDay(localDateInput(day))
   }
 
   return (
@@ -103,7 +104,7 @@ export default function CalendarView() {
         </div>
       </div>
 
-      <div className="card overflow-hidden p-3">
+      <div className="card rise overflow-hidden p-3">
         <div className="grid grid-cols-7 border-b border-slate-100 pb-2 text-center text-xs font-bold uppercase tracking-wide text-slate-400">
           {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d) => (
             <div key={d}>{d}</div>
@@ -117,14 +118,14 @@ export default function CalendarView() {
             return (
               <button
                 key={day.toISOString()}
-                onClick={() => addOn(day)}
-                className={`group flex flex-col gap-1 border-b border-r border-slate-50 p-1.5 text-left transition hover:bg-mint-card/40 ${
+                onClick={() => openDay(day)}
+                className={`group flex flex-col gap-1 rounded-xl border border-transparent p-1.5 text-left transition hover:border-mint-ink/20 hover:bg-mint-card/40 ${
                   inMonth ? '' : 'opacity-40'
-                }`}
+                } ${today ? 'bg-rose-card/40' : ''}`}
               >
                 <span
-                  className={`mb-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${
-                    today ? 'bg-rose-ink text-white' : 'text-slate-500'
+                  className={`mb-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold transition ${
+                    today ? 'bg-rose-ink text-white shadow-clay-sm' : 'text-slate-500 group-hover:text-ink'
                   }`}
                 >
                   {format(day, 'd')}
@@ -152,6 +153,17 @@ export default function CalendarView() {
           })}
         </div>
       </div>
+
+      <DayDetailModal
+        day={detailDay}
+        onClose={() => setDetailDay(null)}
+        onAddEvent={(d) => {
+          setPickDate(d)
+          setDetailDay(null)
+          setShowEvent(true)
+        }}
+        onChanged={load}
+      />
 
       <AddEventModal
         open={showEvent}

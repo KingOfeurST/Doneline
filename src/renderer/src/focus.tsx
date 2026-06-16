@@ -7,7 +7,9 @@ import {
   useState,
   type ReactNode
 } from 'react'
-import { CHANNELS, channelById, playChime } from './lib/sound'
+import { api } from './api'
+import { CHANNELS, channelById } from './lib/sound'
+import { playChime, playTick, startRain, type RainHandle } from './lib/audioFx'
 import { MOODS } from './lib/moods'
 
 type Phase = 'focus' | 'break'
@@ -18,6 +20,17 @@ interface FocusCtx {
 
   /** True once a session has been started (controls setup vs ambient view). */
   started: boolean
+  /** Which focus block we're on (1, 2, 3, …). */
+  round: number
+  /** Pre-focus get-ready countdown is running. */
+  preparing: boolean
+  /** Seconds left in the get-ready countdown. */
+  countdown: number
+  /** Joined a co-focus session, waiting for the host to start. */
+  waiting: boolean
+  setWaiting: (v: boolean) => void
+  /** Start (or join) a session anchored to a shared timestamp, in sync. */
+  startAnchored: (startedAtISO: string, focusMin: number, breakMin: number) => void
 
   phase: Phase
   secondsLeft: number
@@ -28,6 +41,8 @@ interface FocusCtx {
 
   taskId: string | null
   setTaskId: (id: string | null) => void
+  taskTitle: string | null
+  setTaskTitle: (t: string | null) => void
 
   mood: string
   setMood: (id: string) => void
@@ -36,6 +51,7 @@ interface FocusCtx {
   setChannel: (id: string) => void
   playing: boolean
   togglePlay: () => void
+  stopMusic: () => void
   volume: number
   setVolume: (v: number) => void
   audioError: boolean
@@ -76,6 +92,10 @@ export function FocusProvider({ children }: { children: ReactNode }) {
 
   const [open, setOpen] = useState(false)
   const [started, setStarted] = useState(false)
+  const [round, setRound] = useState(0)
+  const [preparing, setPreparing] = useState(false)
+  const [countdown, setCountdown] = useState(0)
+  const [waiting, setWaiting] = useState(false)
   const [phase, setPhase] = useState<Phase>('focus')
   const [focusMin, setFocusMinState] = useState(prefs.focusMin)
   const [breakMin, setBreakMinState] = useState(prefs.breakMin)
@@ -83,6 +103,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   const [isRunning, setIsRunning] = useState(false)
 
   const [taskId, setTaskId] = useState<string | null>(null)
+  const [taskTitle, setTaskTitle] = useState<string | null>(null)
   const [mood, setMood] = useState(prefs.mood)
 
   const [channelId, setChannelId] = useState(prefs.channelId)
@@ -91,6 +112,9 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   const [audioError, setAudioError] = useState(false)
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const rainRef = useRef<RainHandle | null>(null)
+  const secondsLeftRef = useRef(secondsLeft)
+  secondsLeftRef.current = secondsLeft
   const totalSeconds = (phase === 'focus' ? focusMin : breakMin) * 60
 
   // --- persistence ---
@@ -111,30 +135,71 @@ export function FocusProvider({ children }: { children: ReactNode }) {
       a.pause()
       a.src = ''
       audioRef.current = null
+      rainRef.current?.stop()
+      rainRef.current = null
     }
   }, [])
 
   useEffect(() => {
     const a = audioRef.current
     if (a) a.volume = volume
+    rainRef.current?.setVolume(volume)
   }, [volume])
 
+  // Drive playback: generated rain or a streamed station depending on the channel.
   useEffect(() => {
     const a = audioRef.current
     if (!a) return
-    if (playing) {
+    rainRef.current?.stop()
+    rainRef.current = null
+
+    if (!playing) {
+      a.pause()
+      return
+    }
+
+    const ch = channelById(channelId)
+    if (ch.kind === 'rain') {
+      a.pause()
       setAudioError(false)
-      a.src = channelById(channelId).url
+      rainRef.current = startRain(volume)
+    } else {
+      setAudioError(false)
+      a.src = ch.url ?? ''
       a.volume = volume
       a.play().catch(() => {
         setAudioError(true)
         setPlaying(false)
       })
-    } else {
-      a.pause()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, channelId])
+
+  // Soft ticks for the final 5 seconds of a running phase.
+  useEffect(() => {
+    if (isRunning && secondsLeft <= 5 && secondsLeft >= 1) playTick()
+  }, [secondsLeft, isRunning])
+
+  // Broadcast presence to the shared workspace (for co-focus). Emits on state
+  // changes + a 20s heartbeat; the friend computes time-left locally from ends_at.
+  useEffect(() => {
+    if (!started) {
+      api.presence.update({ status: 'idle' }).catch(() => {})
+      return
+    }
+    const emit = () =>
+      api.presence
+        .update({
+          status: 'focusing',
+          phase,
+          task_title: taskTitle,
+          ends_at: new Date(Date.now() + secondsLeftRef.current * 1000).toISOString()
+        })
+        .catch(() => {})
+    emit()
+    const hb = setInterval(emit, 20_000)
+    return () => clearInterval(hb)
+  }, [started, isRunning, phase, taskTitle])
 
   // --- timer tick ---
   useEffect(() => {
@@ -149,23 +214,71 @@ export function FocusProvider({ children }: { children: ReactNode }) {
     const next: Phase = phase === 'focus' ? 'break' : 'focus'
     playChime(next)
     setPhase(next)
+    if (next === 'focus') setRound((r) => r + 1) // each focus block is a new session
     setSecondsLeft((next === 'focus' ? focusMin : breakMin) * 60)
   }, [secondsLeft, isRunning, phase, focusMin, breakMin])
 
+  // --- pre-focus get-ready countdown (10 → 0, then start) ---
+  useEffect(() => {
+    if (!preparing) return
+    if (countdown <= 0) {
+      setPreparing(false)
+      setIsRunning(true)
+      playChime('focus')
+      return
+    }
+    const id = window.setTimeout(() => {
+      playTick()
+      setCountdown((c) => c - 1)
+    }, 1000)
+    return () => window.clearTimeout(id)
+  }, [preparing, countdown])
+
   const start = useCallback(() => {
-    setStarted(true)
-    setSecondsLeft((s) => (s <= 0 ? totalSeconds : s))
-    setIsRunning(true)
-  }, [totalSeconds])
+    if (!started) {
+      // Fresh session: run a 10s get-ready countdown before the focus timer.
+      setStarted(true)
+      setRound(1)
+      setSecondsLeft((s) => (s <= 0 ? totalSeconds : s))
+      setPreparing(true)
+      setCountdown(10)
+    } else {
+      setIsRunning(true) // resume after a pause
+    }
+  }, [started, totalSeconds])
 
   const pause = useCallback(() => setIsRunning(false), [])
+
+  // Start (or join) a session anchored to a shared timestamp so both friends are
+  // in sync regardless of who detects it first. Skips the get-ready countdown.
+  const startAnchored = useCallback((startedAtISO: string, fMin: number, bMin: number) => {
+    const elapsed = Math.max(0, Math.floor((Date.now() - new Date(startedAtISO).getTime()) / 1000))
+    setFocusMinState(fMin)
+    setBreakMinState(bMin)
+    setPhase('focus')
+    setRound(1)
+    setSecondsLeft(Math.max(1, fMin * 60 - elapsed))
+    setPreparing(false)
+    setCountdown(0)
+    setWaiting(false)
+    setStarted(true)
+    setOpen(true)
+    setIsRunning(true)
+  }, [])
 
   const reset = useCallback(() => {
     setIsRunning(false)
     setStarted(false)
+    setPreparing(false)
+    setCountdown(0)
+    setWaiting(false)
+    setRound(0)
     setPhase('focus')
     setSecondsLeft(focusMin * 60)
+    setPlaying(false) // stop the music when the session ends
   }, [focusMin])
+
+  const stopMusic = useCallback(() => setPlaying(false), [])
 
   const skip = useCallback(() => {
     const next: Phase = phase === 'focus' ? 'break' : 'focus'
@@ -205,6 +318,12 @@ export function FocusProvider({ children }: { children: ReactNode }) {
         open,
         setOpen,
         started,
+        round,
+        preparing,
+        countdown,
+        waiting,
+        setWaiting,
+        startAnchored,
         phase,
         secondsLeft,
         totalSeconds,
@@ -213,12 +332,15 @@ export function FocusProvider({ children }: { children: ReactNode }) {
         breakMin,
         taskId,
         setTaskId,
+        taskTitle,
+        setTaskTitle,
         mood,
         setMood,
         channelId,
         setChannel,
         playing,
         togglePlay,
+        stopMusic,
         volume,
         setVolume,
         audioError,
