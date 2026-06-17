@@ -1,6 +1,6 @@
 {
   "name": "doneline",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local-first desktop tasks, goals and calendar with Apple Calendar sync and an MCP server for Claude.",
   "author": "Chris",
   "license": "MIT",
@@ -12,12 +12,15 @@
     "dist": "electron-vite build && electron-builder --publish never",
     "dist:win": "electron-vite build && electron-builder --win --publish never",
     "dist:mac": "electron-vite build && electron-builder --mac --publish never",
+    "publish:win": "electron-vite build && electron-builder --win --publish always",
+    "publish:mac": "electron-vite build && electron-builder --mac --publish always",
     "build:mcp": "esbuild mcp/server.ts --bundle --platform=node --format=cjs --packages=external --outfile=out/mcp/server.cjs",
     "mcp": "npm run build:mcp && node out/mcp/server.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "date-fns": "^4.1.0",
+    "electron-updater": "^6.3.9",
     "libsql": "^0.5.7",
     "tsdav": "^2.1.5",
     "uuid": "^11.0.5",
@@ -54,6 +57,14 @@
     "asarUnpack": [
       "**/node_modules/libsql/**",
       "**/node_modules/@libsql/**"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "KingOfeurST",
+        "repo": "Doneline",
+        "releaseType": "release"
+      }
     ],
     "win": {
       "target": "nsis"

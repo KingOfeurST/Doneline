@@ -1,6 +1,9 @@
 import { app, BrowserWindow, Menu, shell, ipcMain } from 'electron'
 import { join } from 'node:path'
+import electronUpdater from 'electron-updater'
 import { CH } from '../shared/channels.js'
+
+const { autoUpdater } = electronUpdater
 
 // The app and the MCP server share one DB. Both default to ~/.doneline (see
 // core/paths.ts). Override with the DONELINE_DIR env var if you want it elsewhere
@@ -108,6 +111,14 @@ app.whenReady().then(async () => {
         console.error(`[doneline] startup calendar sync failed for ${person.name}:`, err)
       )
     }
+  }
+
+  // Auto-update from GitHub Releases (packaged builds only). Notifies and
+  // installs on quit when a newer version is published.
+  if (app.isPackaged) {
+    autoUpdater.checkForUpdatesAndNotify().catch((err) =>
+      console.error('[doneline] update check failed:', err)
+    )
   }
 
   app.on('activate', () => {
