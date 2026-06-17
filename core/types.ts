@@ -57,6 +57,7 @@ export interface CalEvent {
   ends_at: string // ISO datetime
   all_day: number
   color: string
+  shared: number // 1 = shown for everyone in the workspace
   attendees: string | null // comma-separated names, optional
   caldav_uid: string | null
   caldav_etag: string | null

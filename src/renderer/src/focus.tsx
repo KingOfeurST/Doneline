@@ -183,19 +183,18 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   // Broadcast presence to the shared workspace (for co-focus). Emits on state
   // changes + a 20s heartbeat; the friend computes time-left locally from ends_at.
   useEffect(() => {
-    if (!started) {
-      api.presence.update({ status: 'idle' }).catch(() => {})
-      return
+    const emit = () => {
+      const payload = started
+        ? {
+            status: 'focusing' as const,
+            phase,
+            task_title: taskTitle,
+            ends_at: new Date(Date.now() + secondsLeftRef.current * 1000).toISOString()
+          }
+        : { status: 'idle' as const }
+      api.presence.update(payload).catch(() => {})
     }
-    const emit = () =>
-      api.presence
-        .update({
-          status: 'focusing',
-          phase,
-          task_title: taskTitle,
-          ends_at: new Date(Date.now() + secondsLeftRef.current * 1000).toISOString()
-        })
-        .catch(() => {})
+    // Heartbeat in every state so a friend sees you as online (not just focusing).
     emit()
     const hb = setInterval(emit, 20_000)
     return () => clearInterval(hb)

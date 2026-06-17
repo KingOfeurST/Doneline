@@ -84,6 +84,7 @@ export interface DonelineAPI {
       ends_at: string
       person_id?: string
       all_day?: boolean
+      shared?: boolean
       location?: string | null
       notes?: string | null
       color?: string
@@ -103,6 +104,8 @@ export interface DonelineAPI {
   presence: {
     /** This device's profile id (defaults to the primary profile). */
     getSelf(): Promise<string>
+    /** Raw stored identity — null if the user hasn't picked "This is me" yet. */
+    getSelfRaw(): Promise<string | null>
     setSelf(personId: string): Promise<boolean>
     list(): Promise<Presence[]>
     update(p: {

@@ -17,6 +17,7 @@ export default function TodayView() {
   const [events, setEvents] = useState<CalEvent[]>([])
   const [showTodo, setShowTodo] = useState(false)
   const [showEvent, setShowEvent] = useState(false)
+  const [editEvent, setEditEvent] = useState<CalEvent | null>(null)
 
   const load = useCallback(async () => {
     const day = await api.today()
@@ -71,6 +72,10 @@ export default function TodayView() {
                 <EventCard
                   event={e}
                   onDelete={removeEvent}
+                  onEdit={(ev) => {
+                    setEditEvent(ev)
+                    setShowEvent(true)
+                  }}
                   owner={combined && p ? { emoji: p.emoji, name: p.name } : undefined}
                 />
               </div>
@@ -82,7 +87,13 @@ export default function TodayView() {
       <section className="card rise p-7" style={{ animationDelay: '80ms' }}>
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-2xl font-extrabold text-ink">Todo</h2>
-          <button className="btn-soft py-2 text-sm" onClick={() => setShowEvent(true)}>
+          <button
+            className="btn-soft py-2 text-sm"
+            onClick={() => {
+              setEditEvent(null)
+              setShowEvent(true)
+            }}
+          >
             + Event
           </button>
         </div>
@@ -117,10 +128,14 @@ export default function TodayView() {
       />
       <AddEventModal
         open={showEvent}
-        onClose={() => setShowEvent(false)}
+        onClose={() => {
+          setShowEvent(false)
+          setEditEvent(null)
+        }}
         onCreated={load}
         defaultDate={today}
         ownerId={defaultOwnerId}
+        editEvent={editEvent}
       />
     </div>
   )

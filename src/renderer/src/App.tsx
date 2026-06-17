@@ -10,6 +10,7 @@ import ProfileSwitcher from './components/ProfileSwitcher'
 import FocusButton from './components/FocusButton'
 import FocusOverlay from './components/FocusOverlay'
 import FocusInvitePrompt from './components/FocusInvitePrompt'
+import SelfSetupBanner from './components/SelfSetupBanner'
 import PresenceChip from './components/PresenceChip'
 import { ProfileProvider } from './profile'
 import { FocusProvider } from './focus'
@@ -90,6 +91,7 @@ export default function App() {
 
         <FocusOverlay />
         <FocusInvitePrompt />
+        <SelfSetupBanner />
       </div>
       </FocusProvider>
     </ProfileProvider>

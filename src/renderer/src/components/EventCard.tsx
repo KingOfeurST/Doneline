@@ -5,15 +5,20 @@ import { tintFor } from '../lib/colors'
 interface Props {
   event: CalEvent
   onDelete?: (id: string) => void
+  onEdit?: (event: CalEvent) => void
   owner?: { emoji: string; name: string }
 }
 
-export default function EventCard({ event, onDelete, owner }: Props) {
+export default function EventCard({ event, onDelete, onEdit, owner }: Props) {
   const color = event.color || '#2f7a4d'
   return (
     <div
-      className="group relative rounded-xl2 border p-5 shadow-clay-sm transition duration-200 hover:-translate-y-0.5"
+      className={`group relative rounded-xl2 border p-5 shadow-clay-sm transition duration-200 hover:-translate-y-0.5 ${
+        onEdit ? 'cursor-pointer' : ''
+      }`}
       style={{ background: tintFor(color), borderColor: color + '33' }}
+      onClick={onEdit ? () => onEdit(event) : undefined}
+      title={onEdit ? 'Edit event' : undefined}
     >
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
@@ -31,7 +36,10 @@ export default function EventCard({ event, onDelete, owner }: Props) {
         </div>
         {onDelete && (
           <button
-            onClick={() => onDelete(event.id)}
+            onClick={(e) => {
+              e.stopPropagation()
+              onDelete(event.id)
+            }}
             aria-label="Delete event"
             className="rounded-full p-1.5 opacity-0 transition hover:bg-white/60 group-hover:opacity-100"
             style={{ color }}

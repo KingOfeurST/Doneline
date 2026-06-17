@@ -69,6 +69,7 @@ const api: DonelineAPI = {
 
   presence: {
     getSelf: () => ipcRenderer.invoke(CH.selfGet),
+    getSelfRaw: () => ipcRenderer.invoke(CH.selfRaw),
     setSelf: (personId) => ipcRenderer.invoke(CH.selfSet, personId),
     list: () => ipcRenderer.invoke(CH.presenceList),
     update: (p) => ipcRenderer.invoke(CH.presenceUpdate, p),

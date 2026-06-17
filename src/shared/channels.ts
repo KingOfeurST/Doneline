@@ -47,6 +47,7 @@ export const CH = {
   presenceList: 'presence:list',
   selfGet: 'presence:selfGet',
   selfSet: 'presence:selfSet',
+  selfRaw: 'presence:selfRaw',
   nudgeSend: 'presence:nudge',
   inviteSend: 'presence:invite',
   invitesPending: 'presence:invitesPending',

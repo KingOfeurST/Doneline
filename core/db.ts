@@ -137,6 +137,9 @@ function migrate(db: DB): void {
   ensureColumn(db, 'focus_invites', 'accepted', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn(db, 'focus_invites', 'started_at', 'TEXT')
 
+  // v3: events shared with everyone (show for both people).
+  ensureColumn(db, 'events', 'shared', 'INTEGER NOT NULL DEFAULT 0')
+
   // Seed the two default people if the table is empty.
   const count = (db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n
   if (count === 0) {

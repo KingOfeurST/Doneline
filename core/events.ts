@@ -5,7 +5,8 @@ import type { CalEvent } from './types.js'
 
 function personFilter(personId?: string): { sql: string; args: string[] } {
   if (!personId || personId === 'all') return { sql: '', args: [] }
-  return { sql: 'person_id = ?', args: [personId] }
+  // A person sees their own events plus any shared-with-everyone events.
+  return { sql: '(person_id = ? OR shared = 1)', args: [personId] }
 }
 
 // Templates (recurrence set) are rules, not dated events — exclude from listings.
@@ -63,6 +64,7 @@ export function createEvent(input: {
   ends_at: string
   person_id?: string
   all_day?: boolean
+  shared?: boolean
   location?: string | null
   notes?: string | null
   color?: string
@@ -78,9 +80,9 @@ export function createEvent(input: {
   const id = uuid()
   db.prepare(
     `INSERT INTO events
-     (id, person_id, title, location, notes, starts_at, ends_at, all_day, color, attendees,
+     (id, person_id, title, location, notes, starts_at, ends_at, all_day, color, shared, attendees,
       caldav_uid, caldav_etag, caldav_url, recurrence, recur_parent, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     input.person_id || primaryPersonId(),
@@ -91,6 +93,7 @@ export function createEvent(input: {
     input.ends_at,
     input.all_day ? 1 : 0,
     input.color || '#2f7a4d',
+    input.shared ? 1 : 0,
     input.attendees ?? null,
     input.caldav_uid ?? null,
     input.caldav_etag ?? null,
@@ -113,7 +116,7 @@ export function updateEvent(
     .prepare(
       `UPDATE events SET
         person_id = ?, title = ?, location = ?, notes = ?, starts_at = ?, ends_at = ?,
-        all_day = ?, color = ?, attendees = ?, caldav_uid = ?, caldav_etag = ?, caldav_url = ?,
+        all_day = ?, color = ?, shared = ?, attendees = ?, caldav_uid = ?, caldav_etag = ?, caldav_url = ?,
         recurrence = ?, recur_parent = ?, source = ?
        WHERE id = ?`
     )
@@ -126,6 +129,7 @@ export function updateEvent(
       m.ends_at,
       m.all_day ? 1 : 0,
       m.color,
+      m.shared ? 1 : 0,
       m.attendees,
       m.caldav_uid,
       m.caldav_etag,

@@ -28,6 +28,7 @@ export default function CalendarView() {
   const [events, setEvents] = useState<CalEvent[]>([])
   const [showEvent, setShowEvent] = useState(false)
   const [pickDate, setPickDate] = useState<string | undefined>()
+  const [editEvent, setEditEvent] = useState<CalEvent | null>(null)
   const [detailDay, setDetailDay] = useState<string | null>(null)
 
   const range = useMemo(() => {
@@ -119,7 +120,7 @@ export default function CalendarView() {
               <button
                 key={day.toISOString()}
                 onClick={() => openDay(day)}
-                className={`group flex flex-col gap-1 rounded-xl border border-transparent p-1.5 text-left transition hover:border-mint-ink/20 hover:bg-mint-card/40 ${
+                className={`group flex flex-col gap-1 overflow-hidden rounded-xl border border-transparent p-1.5 text-left transition hover:border-mint-ink/20 hover:bg-mint-card/40 ${
                   inMonth ? '' : 'opacity-40'
                 } ${today ? 'bg-rose-card/40' : ''}`}
               >
@@ -159,6 +160,12 @@ export default function CalendarView() {
         onClose={() => setDetailDay(null)}
         onAddEvent={(d) => {
           setPickDate(d)
+          setEditEvent(null)
+          setDetailDay(null)
+          setShowEvent(true)
+        }}
+        onEditEvent={(e) => {
+          setEditEvent(e)
           setDetailDay(null)
           setShowEvent(true)
         }}
@@ -167,10 +174,14 @@ export default function CalendarView() {
 
       <AddEventModal
         open={showEvent}
-        onClose={() => setShowEvent(false)}
+        onClose={() => {
+          setShowEvent(false)
+          setEditEvent(null)
+        }}
         onCreated={load}
         defaultDate={pickDate}
         ownerId={defaultOwnerId}
+        editEvent={editEvent}
       />
     </div>
   )

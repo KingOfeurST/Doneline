@@ -172,6 +172,7 @@ export function registerIpc(onWorkspaceChange: () => void): void {
 
   // Presence & co-focus
   ipcMain.handle(CH.selfGet, () => getSelfPersonId() ?? primaryPersonId())
+  ipcMain.handle(CH.selfRaw, () => getSelfPersonId()) // null if never explicitly set
   ipcMain.handle(CH.selfSet, (_e, personId: string) => {
     setSelfPersonId(personId)
     return true

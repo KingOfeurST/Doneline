@@ -10,10 +10,11 @@ interface Props {
   day: string | null // YYYY-MM-DD, null = closed
   onClose: () => void
   onAddEvent: (day: string) => void
+  onEditEvent: (event: CalEvent) => void
   onChanged: () => void
 }
 
-export default function DayDetailModal({ day, onClose, onAddEvent, onChanged }: Props) {
+export default function DayDetailModal({ day, onClose, onAddEvent, onEditEvent, onChanged }: Props) {
   const { queryPersonId, personById } = useProfile()
   const [events, setEvents] = useState<CalEvent[]>([])
   const [todos, setTodos] = useState<TodoWithGoal[]>([])
@@ -63,10 +64,12 @@ export default function DayDetailModal({ day, onClose, onAddEvent, onChanged }: 
                 return (
                   <div
                     key={e.id}
-                    className="group flex items-center gap-3 rounded-2xl p-3"
+                    className="group flex cursor-pointer items-center gap-3 rounded-2xl p-3 transition hover:brightness-95"
                     style={{ background: (e.color || '#2f7a4d') + '18' }}
+                    onClick={() => onEditEvent(e)}
+                    title="Edit event"
                   >
-                    <span className="text-sm">{p?.emoji ?? ''}</span>
+                    <span className="text-sm">{e.shared === 1 ? '👥' : p?.emoji ?? ''}</span>
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-bold" style={{ color: e.color || '#2f7a4d' }}>
                         {e.title}
@@ -77,7 +80,10 @@ export default function DayDetailModal({ day, onClose, onAddEvent, onChanged }: 
                       </p>
                     </div>
                     <button
-                      onClick={() => delEvent(e.id)}
+                      onClick={(ev) => {
+                        ev.stopPropagation()
+                        delEvent(e.id)
+                      }}
                       aria-label="Delete event"
                       className="rounded-full p-1.5 text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-ink group-hover:opacity-100"
                     >
