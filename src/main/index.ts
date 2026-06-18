@@ -1,9 +1,23 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, shell, ipcMain } from 'electron'
 import { join } from 'node:path'
 import electronUpdater from 'electron-updater'
-import { CH } from '../shared/channels.js'
+import { CH, EVT } from '../shared/channels.js'
 
 const { autoUpdater } = electronUpdater
+
+type UpdateState = 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
+function sendUpdateStatus(state: UpdateState, extra: Record<string, unknown> = {}): void {
+  mainWindow?.webContents.send(EVT.updateStatus, { state, ...extra })
+}
+
+function setupAutoUpdate(): void {
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'))
+  autoUpdater.on('update-available', (i) => sendUpdateStatus('available', { version: i.version }))
+  autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'))
+  autoUpdater.on('download-progress', (p) => sendUpdateStatus('downloading', { percent: Math.round(p.percent) }))
+  autoUpdater.on('update-downloaded', (i) => sendUpdateStatus('downloaded', { version: i.version }))
+  autoUpdater.on('error', (e) => sendUpdateStatus('error', { message: String(e?.message ?? e) }))
+}
 
 // The app and the MCP server share one DB. Both default to ~/.doneline (see
 // core/paths.ts). Override with the DONELINE_DIR env var if you want it elsewhere
@@ -194,11 +208,27 @@ app.whenReady().then(async () => {
 
   // Auto-update from GitHub Releases (packaged builds only). Notifies and
   // installs on quit when a newer version is published.
+  setupAutoUpdate()
   if (app.isPackaged) {
     autoUpdater.checkForUpdatesAndNotify().catch((err) =>
       console.error('[doneline] update check failed:', err)
     )
   }
+
+  ipcMain.handle(CH.appVersion, () => app.getVersion())
+  ipcMain.handle(CH.updateCheck, async () => {
+    if (!app.isPackaged) return { state: 'dev' as const }
+    try {
+      await autoUpdater.checkForUpdates()
+      return { state: 'checking' as const }
+    } catch (err) {
+      return { state: 'error' as const, message: String(err) }
+    }
+  })
+  ipcMain.handle(CH.updateInstall, () => {
+    isQuitting = true
+    autoUpdater.quitAndInstall()
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

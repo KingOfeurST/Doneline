@@ -22,8 +22,70 @@ export default function SettingsView() {
       <IdentitySection people={people} />
       <CalendarSection people={people} initialPerson={active === 'all' ? people[0]?.id : active} />
       <ArchiveSection />
+      <UpdatesSection />
       <ClaudeSection />
     </div>
+  )
+}
+
+/* ------------------------------- Updates ------------------------------ */
+
+function UpdatesSection() {
+  const [version, setVersion] = useState('')
+  const [msg, setMsg] = useState('')
+  const [downloaded, setDownloaded] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api.updates.version().then(setVersion)
+    return api.updates.onStatus((s) => {
+      setBusy(s.state === 'checking' || s.state === 'downloading')
+      if (s.state === 'checking') setMsg('Checking…')
+      else if (s.state === 'available') setMsg(`Update ${s.version ?? ''} found — downloading…`)
+      else if (s.state === 'downloading') setMsg(`Downloading… ${s.percent ?? 0}%`)
+      else if (s.state === 'downloaded') {
+        setMsg(`Update ${s.version ?? ''} ready.`)
+        setDownloaded(true)
+      } else if (s.state === 'not-available') setMsg("You're on the latest version 🎉")
+      else if (s.state === 'error') setMsg(`Couldn't check: ${s.message ?? 'unknown error'}`)
+    })
+  }, [])
+
+  async function check() {
+    setBusy(true)
+    setMsg('Checking…')
+    const r = await api.updates.check()
+    if (r.state === 'dev') {
+      setBusy(false)
+      setMsg('Updates only work in the installed app, not in dev mode.')
+    }
+  }
+
+  return (
+    <section className="card space-y-3 p-7">
+      <div>
+        <h2 className="text-xl font-extrabold text-ink">Updates</h2>
+        <p className="mt-1 text-sm font-semibold text-slate-500">
+          Doneline updates itself automatically, but you can check right now.
+          {version ? ` You're on v${version}.` : ''}
+        </p>
+      </div>
+
+      {msg && (
+        <p className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-bold text-slate-600">{msg}</p>
+      )}
+
+      <div className="flex flex-wrap gap-3">
+        <button className="btn-soft" onClick={check} disabled={busy}>
+          Check for updates
+        </button>
+        {downloaded && (
+          <button className="btn-primary" onClick={() => api.updates.install()}>
+            Restart &amp; update
+          </button>
+        )}
+      </div>
+    </section>
   )
 }
 

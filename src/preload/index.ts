@@ -72,6 +72,17 @@ const api: DonelineAPI = {
     return () => ipcRenderer.removeListener('tray:new-todo', handler)
   },
 
+  updates: {
+    version: () => ipcRenderer.invoke(CH.appVersion),
+    check: () => ipcRenderer.invoke(CH.updateCheck),
+    install: () => ipcRenderer.invoke(CH.updateInstall),
+    onStatus: (cb) => {
+      const handler = (_e: unknown, s: { state: string; version?: string; percent?: number; message?: string }) => cb(s)
+      ipcRenderer.on(EVT.updateStatus, handler)
+      return () => ipcRenderer.removeListener(EVT.updateStatus, handler)
+    }
+  },
+
   focus: {
     record: (input) => ipcRenderer.invoke(CH.focusRecord, input),
     stats: (personId) => ipcRenderer.invoke(CH.focusStats, personId),

@@ -42,6 +42,9 @@ export const CH = {
 
   maintenanceRun: 'app:maintenance',
   toggleFullscreen: 'app:toggleFullscreen',
+  appVersion: 'app:version',
+  updateCheck: 'update:check',
+  updateInstall: 'update:install',
 
   focusRecord: 'focus:record',
   focusStats: 'focus:stats',
@@ -65,9 +68,10 @@ export const CH = {
   today: 'app:today'
 } as const
 
-/** Main → renderer push event fired after a background sync changes data. */
+/** Main → renderer push events. */
 export const EVT = {
-  workspaceChanged: 'workspace:changed'
+  workspaceChanged: 'workspace:changed',
+  updateStatus: 'update:status'
 } as const
 
 export type Channel = (typeof CH)[keyof typeof CH]

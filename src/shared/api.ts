@@ -106,6 +106,13 @@ export interface DonelineAPI {
   /** Fires when the tray "New todo" item is clicked. Returns an unsubscribe fn. */
   onTrayNewTodo(cb: () => void): () => void
 
+  updates: {
+    version(): Promise<string>
+    check(): Promise<{ state: string; message?: string }>
+    install(): Promise<void>
+    onStatus(cb: (s: { state: string; version?: string; percent?: number; message?: string }) => void): () => void
+  }
+
   focus: {
     record(input: { taskId?: string | null; durationSeconds: number; startedAt: string; endedAt: string }): Promise<boolean>
     stats(personId?: string): Promise<FocusStats>
