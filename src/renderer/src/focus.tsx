@@ -137,6 +137,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
         startedAt: new Date(now.getTime() - duration * 1000).toISOString(),
         endedAt: now.toISOString()
       })
+      .then(() => window.dispatchEvent(new Event('doneline:stats')))
       .catch(() => {})
   }, [])
 

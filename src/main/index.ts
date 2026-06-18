@@ -50,31 +50,36 @@ function trayIconPath(): string {
 }
 
 function createTray(): void {
-  let img = nativeImage.createFromPath(trayIconPath())
-  if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
-  tray = new Tray(img)
-  tray.setToolTip('Doneline')
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: 'Open Doneline', click: showWindow },
-      {
-        label: 'New todo',
-        click: () => {
-          showWindow()
-          mainWindow?.webContents.send('tray:new-todo')
+  try {
+    let img = nativeImage.createFromPath(trayIconPath())
+    if (img.isEmpty()) return // no icon available — skip the tray rather than crash
+    img = img.resize({ width: 18, height: 18 })
+    tray = new Tray(img)
+    tray.setToolTip('Doneline')
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: 'Open Doneline', click: showWindow },
+        {
+          label: 'New todo',
+          click: () => {
+            showWindow()
+            mainWindow?.webContents.send('tray:new-todo')
+          }
+        },
+        { type: 'separator' },
+        {
+          label: 'Quit',
+          click: () => {
+            isQuitting = true
+            app.quit()
+          }
         }
-      },
-      { type: 'separator' },
-      {
-        label: 'Quit',
-        click: () => {
-          isQuitting = true
-          app.quit()
-        }
-      }
-    ])
-  )
-  tray.on('click', showWindow)
+      ])
+    )
+    tray.on('click', showWindow)
+  } catch (err) {
+    console.error('[doneline] tray init failed:', err)
+  }
 }
 
 function createWindow(): void {
@@ -97,9 +102,10 @@ function createWindow(): void {
   mainWindow.on('ready-to-show', () => mainWindow?.show())
 
   // Closing the window hides it to the tray (so the focus timer keeps running);
-  // real quit comes from the tray's Quit item.
+  // real quit comes from the tray's Quit item. Only do this when a tray exists,
+  // otherwise the window would vanish with no way to reopen it.
   mainWindow.on('close', (e) => {
-    if (!isQuitting) {
+    if (!isQuitting && tray) {
       e.preventDefault()
       mainWindow?.hide()
     }
@@ -199,10 +205,10 @@ app.whenReady().then(async () => {
   })
 })
 
-// The app lives in the tray; closing the window hides it. Only quit when the
-// user explicitly quits from the tray.
+// With a tray, closing the window is prevented (hidden) so this won't fire until
+// a real quit. Without a tray, fall back to normal quit-on-close (non-mac).
 app.on('window-all-closed', () => {
-  if (isQuitting) app.quit()
+  if (isQuitting || process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {

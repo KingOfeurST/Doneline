@@ -9,7 +9,11 @@ export default function FocusStatsCard() {
   const [stats, setStats] = useState<FocusStats | null>(null)
 
   useEffect(() => {
-    api.focus.stats().then(setStats)
+    const load = () => api.focus.stats().then(setStats)
+    load()
+    // Refresh right after a focus session is recorded (not just on cloud sync).
+    window.addEventListener('doneline:stats', load)
+    return () => window.removeEventListener('doneline:stats', load)
   }, [tick])
 
   if (!stats) return null
