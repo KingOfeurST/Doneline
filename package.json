@@ -1,6 +1,6 @@
 {
   "name": "doneline",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Local-first desktop tasks, goals and calendar with Apple Calendar sync and an MCP server for Claude.",
   "author": "Chris",
   "license": "MIT",
@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "chrono-node": "^2.9.1",
     "date-fns": "^4.1.0",
     "electron-updater": "^6.3.9",
     "libsql": "^0.5.7",
@@ -55,6 +56,12 @@
     },
     "files": [
       "out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "build/icon.png",
+        "to": "icon.png"
+      }
     ],
     "asarUnpack": [
       "**/node_modules/libsql/**",

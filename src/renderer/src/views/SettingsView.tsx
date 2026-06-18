@@ -16,6 +16,7 @@ export default function SettingsView() {
       <h1 className="text-3xl font-extrabold text-ink">Settings</h1>
       <WorkspaceSection />
       <NotificationsSection />
+      <FocusTargetSection />
       <SoundsSection />
       <PeopleSection people={people} reload={reloadPeople} />
       <IdentitySection people={people} />
@@ -54,6 +55,48 @@ function IdentitySection({ people }: { people: Person[] }) {
           </option>
         ))}
       </select>
+    </section>
+  )
+}
+
+/* ---------------------------- Focus target ---------------------------- */
+
+function FocusTargetSection() {
+  const [target, setTarget] = useState(4)
+
+  useEffect(() => {
+    api.focus.getTarget().then(setTarget)
+  }, [])
+
+  function update(n: number) {
+    const v = Math.min(20, Math.max(1, n))
+    setTarget(v)
+    api.focus.setTarget(v)
+  }
+
+  return (
+    <section className="card p-7">
+      <h2 className="text-xl font-extrabold text-ink">Daily focus goal</h2>
+      <p className="mb-3 mt-1 text-sm font-semibold text-slate-500">
+        How many focus sessions you aim for each day. Hitting it keeps your 🔥 streak alive.
+      </p>
+      <div className="flex items-center gap-2">
+        <button className="btn-soft px-3 py-2" onClick={() => update(target - 1)} aria-label="Fewer">
+          −
+        </button>
+        <input
+          type="number"
+          min={1}
+          max={20}
+          value={target}
+          onChange={(e) => update(Number(e.target.value))}
+          className="input w-16 text-center"
+        />
+        <button className="btn-soft px-3 py-2" onClick={() => update(target + 1)} aria-label="More">
+          +
+        </button>
+        <span className="ml-1 text-sm font-bold text-slate-500">sessions / day</span>
+      </div>
     </section>
   )
 }

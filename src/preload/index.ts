@@ -66,6 +66,19 @@ const api: DonelineAPI = {
 
   maintenance: () => ipcRenderer.invoke(CH.maintenanceRun),
   toggleFullscreen: () => ipcRenderer.invoke(CH.toggleFullscreen),
+  onTrayNewTodo: (cb) => {
+    const handler = () => cb()
+    ipcRenderer.on('tray:new-todo', handler)
+    return () => ipcRenderer.removeListener('tray:new-todo', handler)
+  },
+
+  focus: {
+    record: (input) => ipcRenderer.invoke(CH.focusRecord, input),
+    stats: (personId) => ipcRenderer.invoke(CH.focusStats, personId),
+    getTarget: () => ipcRenderer.invoke(CH.focusTargetGet),
+    setTarget: (n) => ipcRenderer.invoke(CH.focusTargetSet, n),
+    tray: (state) => ipcRenderer.send(CH.focusTray, state)
+  },
 
   presence: {
     getSelf: () => ipcRenderer.invoke(CH.selfGet),

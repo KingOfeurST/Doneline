@@ -40,6 +40,23 @@ export function setNotifPrefs(prefs: NotifPrefs): void {
   writeMerged({ notifications: { ...DEFAULT_NOTIF_PREFS, ...prefs } })
 }
 
+const DEFAULT_DAILY_TARGET = 4
+
+/** Daily focus-session target (device-local). */
+export function getDailyTarget(): number {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(prefsFile(), 'utf8')) as { dailyTarget?: number }
+    const n = Number(parsed.dailyTarget)
+    return n >= 1 ? Math.min(20, Math.round(n)) : DEFAULT_DAILY_TARGET
+  } catch {
+    return DEFAULT_DAILY_TARGET
+  }
+}
+
+export function setDailyTarget(n: number): void {
+  writeMerged({ dailyTarget: Math.min(20, Math.max(1, Math.round(n))) })
+}
+
 /** Which workspace profile this device represents (for presence/nudges). */
 export function getSelfPersonId(): string | null {
   try {

@@ -94,6 +94,16 @@ CREATE TABLE IF NOT EXISTS todo_completions (
   PRIMARY KEY (todo_id, person_id)
 );
 
+CREATE TABLE IF NOT EXISTS focus_sessions (
+  id          TEXT PRIMARY KEY,
+  person_id   TEXT NOT NULL,
+  task_id     TEXT,
+  duration_seconds INTEGER NOT NULL,
+  started_at  TEXT NOT NULL,
+  ended_at    TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS focus_invites (
   id          TEXT PRIMARY KEY,
   from_person TEXT NOT NULL,

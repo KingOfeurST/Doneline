@@ -37,6 +37,14 @@ export default function App() {
     return () => document.removeEventListener('click', onClick)
   }, [])
 
+  // Tray "New todo" → jump to Today and focus the quick-add box.
+  useEffect(() => {
+    return api.onTrayNewTodo(() => {
+      setTab('today')
+      setTimeout(() => window.dispatchEvent(new Event('doneline:quickadd')), 50)
+    })
+  }, [])
+
   if (!started) return <StartScreen onDone={() => setStarted(true)} />
 
   return (

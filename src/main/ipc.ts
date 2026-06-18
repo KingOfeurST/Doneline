@@ -52,6 +52,10 @@ import {
   acceptInvite,
   startCoFocus,
   activeInviteFor,
+  recordFocusSession,
+  focusStats,
+  getDailyTarget,
+  setDailyTarget,
   type CalDavConfig,
   type SyncConfig,
   type NotifPrefs
@@ -63,19 +67,45 @@ import { reloadNotifications, testNotification } from './notifications.js'
  * its background-sync loop after the workspace connection is changed.
  */
 export function registerIpc(onWorkspaceChange: () => void): void {
+  // Fire-and-forget push so a local change reaches the shared workspace right
+  // away (shrinks the last-write-wins conflict window from ~8s to near zero).
+  const push = () => void cloudSync().catch(() => {})
+
   ipcMain.handle(CH.today, () => localDay())
 
   // People
   ipcMain.handle(CH.peopleList, () => listPeople())
-  ipcMain.handle(CH.personCreate, (_e, input) => createPerson(input))
-  ipcMain.handle(CH.personUpdate, (_e, id, patch) => updatePerson(id, patch))
-  ipcMain.handle(CH.personDelete, (_e, id) => deletePerson(id))
+  ipcMain.handle(CH.personCreate, (_e, input) => {
+    const r = createPerson(input)
+    push()
+    return r
+  })
+  ipcMain.handle(CH.personUpdate, (_e, id, patch) => {
+    const r = updatePerson(id, patch)
+    push()
+    return r
+  })
+  ipcMain.handle(CH.personDelete, (_e, id) => {
+    deletePerson(id)
+    push()
+  })
 
   // Goals
   ipcMain.handle(CH.goalsList, (_e, opts) => listGoals(opts))
-  ipcMain.handle(CH.goalCreate, (_e, input) => createGoal(input))
-  ipcMain.handle(CH.goalUpdate, (_e, id, patch) => updateGoal(id, patch))
-  ipcMain.handle(CH.goalDelete, (_e, id) => deleteGoal(id))
+  ipcMain.handle(CH.goalCreate, (_e, input) => {
+    const r = createGoal(input)
+    push()
+    return r
+  })
+  ipcMain.handle(CH.goalUpdate, (_e, id, patch) => {
+    const r = updateGoal(id, patch)
+    push()
+    return r
+  })
+  ipcMain.handle(CH.goalDelete, (_e, id) => {
+    deleteGoal(id)
+    push()
+  })
 
   // Todos
   ipcMain.handle(CH.todosList, (_e, opts) => listTodos(opts))
@@ -84,12 +114,25 @@ export function registerIpc(onWorkspaceChange: () => void): void {
   )
   ipcMain.handle(CH.todosArchived, (_e, personId?: string) => listArchivedTodos(personId))
   ipcMain.handle(CH.maintenanceRun, () => runMaintenance())
-  ipcMain.handle(CH.todoCreate, (_e, input) => createTodo(input))
-  ipcMain.handle(CH.todoUpdate, (_e, id, patch) => updateTodo(id, patch))
-  ipcMain.handle(CH.todoToggle, (_e, id, done?: boolean) =>
-    setTodoDone(id, done, getSelfPersonId() ?? primaryPersonId())
-  )
-  ipcMain.handle(CH.todoDelete, (_e, id) => deleteTodo(id))
+  ipcMain.handle(CH.todoCreate, (_e, input) => {
+    const r = createTodo(input)
+    push()
+    return r
+  })
+  ipcMain.handle(CH.todoUpdate, (_e, id, patch) => {
+    const r = updateTodo(id, patch)
+    push()
+    return r
+  })
+  ipcMain.handle(CH.todoToggle, (_e, id, done?: boolean) => {
+    const r = setTodoDone(id, done, getSelfPersonId() ?? primaryPersonId())
+    push()
+    return r
+  })
+  ipcMain.handle(CH.todoDelete, (_e, id) => {
+    deleteTodo(id)
+    push()
+  })
 
   // Events
   ipcMain.handle(CH.eventsList, (_e, opts) => listEvents(opts))
@@ -98,6 +141,7 @@ export function registerIpc(onWorkspaceChange: () => void): void {
   )
   ipcMain.handle(CH.eventCreate, async (_e, input) => {
     const ev = createEvent(input)
+    push() // propagate to the shared workspace
     // Best-effort push to calendar; never block the UI on a network error.
     try {
       await pushEvent(ev.id)
@@ -106,8 +150,15 @@ export function registerIpc(onWorkspaceChange: () => void): void {
     }
     return ev
   })
-  ipcMain.handle(CH.eventUpdate, (_e, id, patch) => updateEvent(id, patch))
-  ipcMain.handle(CH.eventDelete, (_e, id) => deleteEvent(id))
+  ipcMain.handle(CH.eventUpdate, (_e, id, patch) => {
+    const r = updateEvent(id, patch)
+    push()
+    return r
+  })
+  ipcMain.handle(CH.eventDelete, (_e, id) => {
+    deleteEvent(id)
+    push()
+  })
 
   // CalDAV (per person)
   ipcMain.handle(CH.calGetConfig, (_e, personId: string) => {
@@ -216,4 +267,22 @@ export function registerIpc(onWorkspaceChange: () => void): void {
     return startedAt
   })
   ipcMain.handle(CH.inviteActive, () => activeInviteFor(getSelfPersonId() ?? primaryPersonId()) ?? null)
+
+  // Focus stats
+  ipcMain.handle(
+    CH.focusRecord,
+    async (_e, input: { taskId?: string | null; durationSeconds: number; startedAt: string; endedAt: string }) => {
+      recordFocusSession({ personId: getSelfPersonId() ?? primaryPersonId(), ...input })
+      await cloudSync().catch(() => {})
+      return true
+    }
+  )
+  ipcMain.handle(CH.focusStats, (_e, personId?: string) =>
+    focusStats(personId ?? getSelfPersonId() ?? primaryPersonId())
+  )
+  ipcMain.handle(CH.focusTargetGet, () => getDailyTarget())
+  ipcMain.handle(CH.focusTargetSet, (_e, n: number) => {
+    setDailyTarget(n)
+    return true
+  })
 }

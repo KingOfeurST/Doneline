@@ -7,7 +7,8 @@ import type {
   CalDavConfig,
   NotifPrefs,
   Presence,
-  FocusInvite
+  FocusInvite,
+  FocusStats
 } from '../../core/index.js'
 
 // Re-export the entity types so the renderer can import them from one place.
@@ -21,7 +22,8 @@ export type {
   NotifPrefs,
   Recurrence,
   Presence,
-  FocusInvite
+  FocusInvite,
+  FocusStats
 } from '../../core/index.js'
 
 export interface SafeCalDavConfig {
@@ -100,6 +102,18 @@ export interface DonelineAPI {
 
   /** Toggle the OS window fullscreen; resolves to the new fullscreen state. */
   toggleFullscreen(): Promise<boolean>
+
+  /** Fires when the tray "New todo" item is clicked. Returns an unsubscribe fn. */
+  onTrayNewTodo(cb: () => void): () => void
+
+  focus: {
+    record(input: { taskId?: string | null; durationSeconds: number; startedAt: string; endedAt: string }): Promise<boolean>
+    stats(personId?: string): Promise<FocusStats>
+    getTarget(): Promise<number>
+    setTarget(n: number): Promise<boolean>
+    /** Push live focus status to the tray (running, phase, seconds left). */
+    tray(state: { running: boolean; phase: 'focus' | 'break'; secondsLeft: number } | null): void
+  }
 
   presence: {
     /** This device's profile id (defaults to the primary profile). */

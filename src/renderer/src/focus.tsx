@@ -60,6 +60,7 @@ interface FocusCtx {
   pause: () => void
   reset: () => void
   skip: () => void
+  recordFocusBlock: () => void
   addMinutes: (m: number) => void
   setFocusMin: (m: number) => void
   setBreakMin: (m: number) => void
@@ -115,7 +116,29 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   const rainRef = useRef<RainHandle | null>(null)
   const secondsLeftRef = useRef(secondsLeft)
   secondsLeftRef.current = secondsLeft
+  const phaseRef = useRef(phase)
+  phaseRef.current = phase
+  const focusMinRef = useRef(focusMin)
+  focusMinRef.current = focusMin
+  const taskIdRef = useRef(taskId)
+  taskIdRef.current = taskId
   const totalSeconds = (phase === 'focus' ? focusMin : breakMin) * 60
+
+  // Log a completed/ended focus block (counts only time actually focused).
+  const recordFocusBlock = useCallback(() => {
+    if (phaseRef.current !== 'focus') return
+    const duration = focusMinRef.current * 60 - secondsLeftRef.current
+    if (duration < 60) return
+    const now = new Date()
+    api.focus
+      .record({
+        taskId: taskIdRef.current,
+        durationSeconds: duration,
+        startedAt: new Date(now.getTime() - duration * 1000).toISOString(),
+        endedAt: now.toISOString()
+      })
+      .catch(() => {})
+  }, [])
 
   // --- persistence ---
   useEffect(() => {
@@ -180,6 +203,11 @@ export function FocusProvider({ children }: { children: ReactNode }) {
     if (isRunning && secondsLeft <= 5 && secondsLeft >= 1) playTick()
   }, [secondsLeft, isRunning])
 
+  // Mirror the live timer into the system tray.
+  useEffect(() => {
+    api.focus.tray(started ? { running: isRunning, phase, secondsLeft } : null)
+  }, [started, isRunning, phase, secondsLeft])
+
   // Broadcast presence to the shared workspace (for co-focus). Emits on state
   // changes + a 20s heartbeat; the friend computes time-left locally from ends_at.
   useEffect(() => {
@@ -211,6 +239,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!isRunning || secondsLeft !== 0) return
     const next: Phase = phase === 'focus' ? 'break' : 'focus'
+    if (next === 'break') recordFocusBlock() // a focus block just finished
     playChime(next)
     setPhase(next)
     if (next === 'focus') setRound((r) => r + 1) // each focus block is a new session
@@ -251,7 +280,10 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   // Start (or join) a session anchored to a shared timestamp so both friends are
   // in sync regardless of who detects it first. Skips the get-ready countdown.
   const startAnchored = useCallback((startedAtISO: string, fMin: number, bMin: number) => {
-    const elapsed = Math.max(0, Math.floor((Date.now() - new Date(startedAtISO).getTime()) / 1000))
+    const raw = Math.floor((Date.now() - new Date(startedAtISO).getTime()) / 1000)
+    // Guard against clock skew / stale anchors: if elapsed is negative or beyond
+    // the focus length, just start a full focus block.
+    const elapsed = raw < 0 || raw > fMin * 60 ? 0 : raw
     setFocusMinState(fMin)
     setBreakMinState(bMin)
     setPhase('focus')
@@ -281,9 +313,10 @@ export function FocusProvider({ children }: { children: ReactNode }) {
 
   const skip = useCallback(() => {
     const next: Phase = phase === 'focus' ? 'break' : 'focus'
+    if (next === 'break') recordFocusBlock()
     setPhase(next)
     setSecondsLeft((next === 'focus' ? focusMin : breakMin) * 60)
-  }, [phase, focusMin, breakMin])
+  }, [phase, focusMin, breakMin, recordFocusBlock])
 
   const addMinutes = useCallback((m: number) => {
     setSecondsLeft((s) => Math.max(0, s + m * 60))
@@ -347,6 +380,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
         pause,
         reset,
         skip,
+        recordFocusBlock,
         addMinutes,
         setFocusMin,
         setBreakMin

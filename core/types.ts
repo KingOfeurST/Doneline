@@ -91,6 +91,25 @@ export interface Nudge {
   seen: number
 }
 
+export interface FocusSession {
+  id: string
+  person_id: string
+  task_id: string | null
+  duration_seconds: number
+  started_at: string
+  ended_at: string
+  created_at: string
+}
+
+export interface FocusStats {
+  todaySessions: number
+  todayMinutes: number
+  weekMinutes: number
+  target: number
+  targetMet: boolean
+  streak: number
+}
+
 export interface FocusInvite {
   id: string
   from_person: string

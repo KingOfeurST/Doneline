@@ -43,6 +43,12 @@ export const CH = {
   maintenanceRun: 'app:maintenance',
   toggleFullscreen: 'app:toggleFullscreen',
 
+  focusRecord: 'focus:record',
+  focusStats: 'focus:stats',
+  focusTargetGet: 'focus:targetGet',
+  focusTargetSet: 'focus:targetSet',
+  focusTray: 'focus:tray',
+
   presenceUpdate: 'presence:update',
   presenceList: 'presence:list',
   selfGet: 'presence:selfGet',

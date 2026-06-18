@@ -33,6 +33,7 @@ import {
   getCalDavConfig,
   runMaintenance,
   sendNudge,
+  focusStats,
   localDay,
   type Recurrence
 } from '../core/index.js'
@@ -306,6 +307,16 @@ server.tool(
     const result = runMaintenance()
     await sync()
     return text(result)
+  }
+)
+
+server.tool(
+  'focus_stats',
+  "A person's focus stats: sessions today, minutes today/this week, daily target, and streak.",
+  { person_id: z.string().optional().describe('Defaults to the primary profile') },
+  async ({ person_id }) => {
+    await sync()
+    return text(focusStats(person_id ?? selfId()))
   }
 )
 

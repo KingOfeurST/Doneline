@@ -3,6 +3,7 @@ export * from './people.js'
 export * from './goals.js'
 export * from './recurrence.js'
 export * from './presence.js'
+export * from './focusStats.js'
 export * from './todos.js'
 export * from './events.js'
 export * from './settings.js'
@@ -20,6 +21,8 @@ export {
   setNotifPrefs,
   getSelfPersonId,
   setSelfPersonId,
+  getDailyTarget,
+  setDailyTarget,
   DEFAULT_NOTIF_PREFS,
   type NotifPrefs
 } from './prefs.js'

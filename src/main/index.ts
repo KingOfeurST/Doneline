@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, ipcMain } from 'electron'
+import { app, BrowserWindow, Menu, Tray, nativeImage, shell, ipcMain } from 'electron'
 import { join } from 'node:path'
 import electronUpdater from 'electron-updater'
 import { CH } from '../shared/channels.js'
@@ -23,8 +23,59 @@ import {
 } from '../../core/index.js'
 
 let mainWindow: BrowserWindow | null = null
+let tray: Tray | null = null
+let isQuitting = false
 let syncTimer: NodeJS.Timeout | null = null
 let maintenanceTimer: NodeJS.Timeout | null = null
+
+function showWindow(): void {
+  if (!mainWindow) {
+    createWindow()
+    return
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function clock(seconds: number): string {
+  const m = Math.floor(seconds / 60)
+  return `${m}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+function trayIconPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'icon.png')
+    : join(__dirname, '../../build/icon.png')
+}
+
+function createTray(): void {
+  let img = nativeImage.createFromPath(trayIconPath())
+  if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
+  tray = new Tray(img)
+  tray.setToolTip('Doneline')
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: 'Open Doneline', click: showWindow },
+      {
+        label: 'New todo',
+        click: () => {
+          showWindow()
+          mainWindow?.webContents.send('tray:new-todo')
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Quit',
+        click: () => {
+          isQuitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+  tray.on('click', showWindow)
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -44,6 +95,15 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => mainWindow?.show())
+
+  // Closing the window hides it to the tray (so the focus timer keeps running);
+  // real quit comes from the tray's Quit item.
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault()
+      mainWindow?.hide()
+    }
+  })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -90,7 +150,20 @@ app.whenReady().then(async () => {
     mainWindow.setFullScreen(fs)
     return fs
   })
+  // Live focus timer in the tray tooltip (and the menu-bar title on macOS).
+  ipcMain.on(CH.focusTray, (_e, state: { running: boolean; phase: 'focus' | 'break'; secondsLeft: number } | null) => {
+    if (!tray) return
+    if (state) {
+      const label = `${state.phase === 'focus' ? 'Focus' : 'Break'} ${clock(state.secondsLeft)}`
+      tray.setToolTip(`Doneline · ${label}`)
+      if (process.platform === 'darwin') tray.setTitle(` ${clock(state.secondsLeft)}`)
+    } else {
+      tray.setToolTip('Doneline')
+      if (process.platform === 'darwin') tray.setTitle('')
+    }
+  })
   createWindow()
+  createTray()
   startCloudSyncLoop()
   startNotifications(() => mainWindow)
 
@@ -126,18 +199,17 @@ app.whenReady().then(async () => {
   })
 })
 
+// The app lives in the tray; closing the window hides it. Only quit when the
+// user explicitly quits from the tray.
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    if (syncTimer) clearInterval(syncTimer)
-    if (maintenanceTimer) clearInterval(maintenanceTimer)
-    stopNotifications()
-    closeDb()
-    app.quit()
-  }
+  if (isQuitting) app.quit()
 })
 
 app.on('before-quit', () => {
+  isQuitting = true
   if (syncTimer) clearInterval(syncTimer)
+  if (maintenanceTimer) clearInterval(maintenanceTimer)
   stopNotifications()
   closeDb()
+  tray?.destroy()
 })

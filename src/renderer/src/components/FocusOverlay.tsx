@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import type { TodoWithGoal } from '../../../shared/api'
-import type { FocusInvite } from '../../../shared/api'
+import type { FocusInvite, FocusStats } from '../../../shared/api'
 import { useFocus, formatClock } from '../focus'
 import { useProfile } from '../profile'
 import { usePresence, clockFromSeconds } from '../presence'
@@ -390,6 +390,7 @@ function Ambient({
           {f.taskId && <GlassBtn onClick={markDone}>Mark done</GlassBtn>}
           <GlassBtn
             onClick={() => {
+              f.recordFocusBlock()
               f.pause()
               f.stopMusic()
               onEnd()
@@ -428,6 +429,11 @@ function Ambient({
 function Ending({ quote, onClear }: { quote: Quote; onClear: () => void }) {
   const f = useFocus()
   const mood = moodById(f.mood)
+  const [stats, setStats] = useState<FocusStats | null>(null)
+
+  useEffect(() => {
+    api.focus.stats().then(setStats)
+  }, [])
 
   function startAnother() {
     f.reset()
@@ -452,6 +458,13 @@ function Ending({ quote, onClear }: { quote: Quote; onClear: () => void }) {
           “{quote.text}”
         </blockquote>
         <p className="mt-4 text-lg font-bold text-white/80">— {quote.author}</p>
+
+        {stats && (
+          <p className="mt-6 rounded-2xl bg-white/15 px-5 py-2.5 text-sm font-bold text-white backdrop-blur">
+            {stats.todaySessions}/{stats.target} sessions today
+            {stats.streak > 0 ? ` · 🔥 ${stats.streak}-day streak` : ''}
+          </p>
+        )}
 
         <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
           <button

@@ -6,6 +6,8 @@ import TodoRow from '../components/TodoRow'
 import EventCard from '../components/EventCard'
 import AddTodoModal from '../components/AddTodoModal'
 import AddEventModal from '../components/AddEventModal'
+import FocusStatsCard from '../components/FocusStatsCard'
+import QuickAdd from '../components/QuickAdd'
 import { fmtDayLabel } from '../lib/format'
 import { playDing } from '../lib/audioFx'
 
@@ -63,6 +65,8 @@ export default function TodayView() {
         </span>
       </div>
 
+      <FocusStatsCard />
+
       {events.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2">
           {events.map((e, i) => {
@@ -97,6 +101,8 @@ export default function TodayView() {
             + Event
           </button>
         </div>
+
+        <QuickAdd onCreated={load} />
 
         {todos.length === 0 ? (
           <div className="py-10 text-center">
