@@ -58,7 +58,11 @@ function UpdatesSection() {
     if (r.state === 'dev') {
       setBusy(false)
       setMsg('Updates only work in the installed app, not in dev mode.')
+    } else if (r.state === 'error') {
+      setBusy(false)
+      setMsg(`Couldn't check: ${r.message ?? 'unknown error'}`)
     }
+    // For 'checking': the result arrives via onStatus (electron-updater event), which resets busy
   }
 
   return (

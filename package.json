@@ -1,6 +1,6 @@
 {
   "name": "doneline",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Local-first desktop tasks, goals and calendar with Apple Calendar sync and an MCP server for Claude.",
   "author": "Chris",
   "license": "MIT",
