@@ -24,7 +24,7 @@ function setupAutoUpdate(): void {
 // — just set the same value for both processes.
 
 import { registerIpc } from './ipc.js'
-import { startNotifications, stopNotifications, notifyIncomingNudges, notifyIncomingInvites } from './notifications.js'
+import { startNotifications, stopNotifications, notifyIncomingNudges, notifyIncomingInvites, notifyNewReactions } from './notifications.js'
 import {
   initDb,
   closeDb,
@@ -145,8 +145,9 @@ function startCloudSyncLoop(): void {
     try {
       const synced = await cloudSync()
       if (synced) {
-        notifyIncomingNudges(() => mainWindow) // ping on nudges from a friend
-        notifyIncomingInvites(() => mainWindow) // ping on focus-together invites
+        notifyIncomingNudges(() => mainWindow)
+        notifyIncomingInvites(() => mainWindow)
+        notifyNewReactions(() => mainWindow)
         mainWindow?.webContents.send('workspace:changed')
       }
     } catch (err) {

@@ -6,6 +6,7 @@ import {
   unseenNudgesFor,
   markNudgeSeen,
   pendingInvitesFor,
+  newReactionsFor,
   listEvents,
   listDayEvents,
   listTodos,
@@ -19,6 +20,7 @@ let getWindow: () => BrowserWindow | null = () => null
 const notifiedEvents = new Set<string>()
 const notifiedTodos = new Set<string>()
 const notifiedInvites = new Set<string>()
+const notifiedReactions = new Set<string>()
 let morningSentDay = ''
 let appStart = Date.now()
 
@@ -144,6 +146,26 @@ export function notifyIncomingNudges(getWin: () => BrowserWindow | null): void {
     }
   } catch (err) {
     console.error('[doneline] nudge check failed:', err)
+  }
+}
+
+/** Notify when a friend reacts to one of this device's todos. */
+export function notifyNewReactions(getWin: () => BrowserWindow | null): void {
+  try {
+    const self = getSelfPersonId() ?? primaryPersonId()
+    const since = new Date(appStart).toISOString()
+    const reactions = newReactionsFor(self, since)
+    if (reactions.length === 0) return
+    getWindow = getWin
+    const people = new Map(listPeople().map((p) => [p.id, p]))
+    for (const r of reactions) {
+      if (notifiedReactions.has(r.id)) continue
+      notifiedReactions.add(r.id)
+      const from = people.get(r.person_id)
+      show(`${r.emoji} ${from?.name ?? 'A friend'} reacted to your todo`, '')
+    }
+  } catch (err) {
+    console.error('[doneline] reaction check failed:', err)
   }
 }
 

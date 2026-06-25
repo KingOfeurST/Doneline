@@ -54,8 +54,13 @@ import {
   activeInviteFor,
   recordFocusSession,
   focusStats,
+  sharedFocusStreak,
   getDailyTarget,
   setDailyTarget,
+  toggleReaction,
+  listReactionsForTodo,
+  reorderTodos,
+  listActivity,
   type CalDavConfig,
   type SyncConfig,
   type NotifPrefs
@@ -131,6 +136,10 @@ export function registerIpc(onWorkspaceChange: () => void): void {
   })
   ipcMain.handle(CH.todoDelete, (_e, id) => {
     deleteTodo(id)
+    push()
+  })
+  ipcMain.handle(CH.todoReorder, (_e, updates: { id: string; position: number }[]) => {
+    reorderTodos(updates)
     push()
   })
 
@@ -280,9 +289,22 @@ export function registerIpc(onWorkspaceChange: () => void): void {
   ipcMain.handle(CH.focusStats, (_e, personId?: string) =>
     focusStats(personId ?? getSelfPersonId() ?? primaryPersonId())
   )
+  ipcMain.handle(CH.focusSharedStreak, (_e, personIds: string[]) => sharedFocusStreak(personIds))
   ipcMain.handle(CH.focusTargetGet, () => getDailyTarget())
   ipcMain.handle(CH.focusTargetSet, (_e, n: number) => {
     setDailyTarget(n)
     return true
   })
+
+  // Reactions
+  ipcMain.handle(CH.reactionsToggle, async (_e, todoId: string, emoji: string) => {
+    const self = getSelfPersonId() ?? primaryPersonId()
+    const added = toggleReaction(todoId, self, emoji)
+    await cloudSync().catch(() => {})
+    return added
+  })
+  ipcMain.handle(CH.reactionsList, (_e, todoId: string) => listReactionsForTodo(todoId))
+
+  // Activity log
+  ipcMain.handle(CH.activityList, (_e, limit?: number) => listActivity(limit))
 }

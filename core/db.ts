@@ -114,9 +114,28 @@ CREATE TABLE IF NOT EXISTS focus_invites (
   seen        INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS reactions (
+  id         TEXT PRIMARY KEY,
+  todo_id    TEXT NOT NULL,
+  person_id  TEXT NOT NULL,
+  emoji      TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(todo_id, person_id, emoji)
+);
+
+CREATE TABLE IF NOT EXISTS activity_log (
+  id         TEXT PRIMARY KEY,
+  person_id  TEXT NOT NULL,
+  action     TEXT NOT NULL,
+  payload    TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(due_at);
 CREATE INDEX IF NOT EXISTS idx_todos_completed ON todos(completed_at);
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(starts_at);
+CREATE INDEX IF NOT EXISTS idx_reactions_todo ON reactions(todo_id);
+CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
 `
 
 /** Add a column if it isn't already present (idempotent migration helper). */

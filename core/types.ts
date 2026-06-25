@@ -104,10 +104,29 @@ export interface FocusSession {
 export interface FocusStats {
   todaySessions: number
   todayMinutes: number
+  weekSessions: number
   weekMinutes: number
   target: number
   targetMet: boolean
   streak: number
+}
+
+export interface Reaction {
+  id: string
+  todo_id: string
+  person_id: string
+  emoji: string
+  created_at: string
+}
+
+export interface ActivityEntry {
+  id: string
+  person_id: string
+  action: string
+  payload: string
+  created_at: string
+  person_name?: string
+  person_emoji?: string
 }
 
 export interface FocusInvite {

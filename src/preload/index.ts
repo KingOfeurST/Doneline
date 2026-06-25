@@ -26,7 +26,8 @@ const api: DonelineAPI = {
     create: (input) => ipcRenderer.invoke(CH.todoCreate, input),
     update: (id, patch) => ipcRenderer.invoke(CH.todoUpdate, id, patch),
     toggle: (id, done) => ipcRenderer.invoke(CH.todoToggle, id, done),
-    remove: (id) => ipcRenderer.invoke(CH.todoDelete, id)
+    remove: (id) => ipcRenderer.invoke(CH.todoDelete, id),
+    reorder: (updates) => ipcRenderer.invoke(CH.todoReorder, updates)
   },
 
   events: {
@@ -86,9 +87,19 @@ const api: DonelineAPI = {
   focus: {
     record: (input) => ipcRenderer.invoke(CH.focusRecord, input),
     stats: (personId) => ipcRenderer.invoke(CH.focusStats, personId),
+    sharedStreak: (personIds) => ipcRenderer.invoke(CH.focusSharedStreak, personIds),
     getTarget: () => ipcRenderer.invoke(CH.focusTargetGet),
     setTarget: (n) => ipcRenderer.invoke(CH.focusTargetSet, n),
     tray: (state) => ipcRenderer.send(CH.focusTray, state)
+  },
+
+  reactions: {
+    toggle: (todoId, emoji) => ipcRenderer.invoke(CH.reactionsToggle, todoId, emoji),
+    list: (todoId) => ipcRenderer.invoke(CH.reactionsList, todoId)
+  },
+
+  activity: {
+    list: (limit) => ipcRenderer.invoke(CH.activityList, limit)
   },
 
   presence: {

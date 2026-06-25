@@ -1,4 +1,4 @@
-import type { TodoWithGoal } from '../../../shared/api'
+import type { Reaction, TodoWithGoal } from '../../../shared/api'
 import { fmtTime } from '../lib/format'
 import { useProfile } from '../profile'
 
@@ -6,30 +6,72 @@ interface Props {
   todo: TodoWithGoal
   onToggle: (id: string) => void
   onDelete: (id: string) => void
+  onReact?: (todoId: string, emoji: string) => void
+  reactions?: Reaction[]
   showOwner?: boolean
+  dragging?: boolean
+  onDragStart?: () => void
+  onDragEnter?: () => void
+  onDragEnd?: () => void
 }
 
-export default function TodoRow({ todo, onToggle, onDelete, showOwner }: Props) {
+const REACTION_EMOJIS = ['👏', '🔥']
+
+export default function TodoRow({
+  todo,
+  onToggle,
+  onDelete,
+  onReact,
+  reactions = [],
+  showOwner,
+  dragging,
+  onDragStart,
+  onDragEnter,
+  onDragEnd
+}: Props) {
   const { people, self } = useProfile()
   const done = todo.completed_at !== null
   const pastDue = !done && !!todo.due_at && new Date(todo.due_at).getTime() < Date.now()
 
-  // Mutual todos (under a shared goal) need every person to check them off.
   const mutual = todo.goal_shared === 1
   const doneBy = (todo.done_by ?? '').split(',').filter(Boolean)
   const selfDone = mutual ? doneBy.includes(self) : done
   const checked = mutual ? selfDone : done
+
+  // Count reactions by emoji
+  const reactionCounts = REACTION_EMOJIS.map((emoji) => ({
+    emoji,
+    count: reactions.filter((r) => r.emoji === emoji).length,
+    selfReacted: reactions.some((r) => r.emoji === emoji && r.person_id === self)
+  }))
+
   return (
-    <div className="group flex items-center gap-3 border-b border-slate-100 py-3 last:border-0">
+    <div
+      className={`group flex items-center gap-3 border-b border-slate-100 py-3 last:border-0 transition-opacity ${dragging ? 'opacity-30' : ''}`}
+      draggable
+      onDragStart={onDragStart}
+      onDragEnter={(e) => { e.preventDefault(); onDragEnter?.() }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragEnd={onDragEnd}
+    >
+      {/* Drag handle */}
+      <span className="hidden shrink-0 cursor-grab touch-none select-none text-slate-300 group-hover:flex items-center">
+        <svg viewBox="0 0 12 20" className="h-4 w-3" fill="currentColor">
+          <circle cx="3" cy="4" r="1.5" /><circle cx="9" cy="4" r="1.5" />
+          <circle cx="3" cy="10" r="1.5" /><circle cx="9" cy="10" r="1.5" />
+          <circle cx="3" cy="16" r="1.5" /><circle cx="9" cy="16" r="1.5" />
+        </svg>
+      </span>
+
       {showOwner && (
         <span
           className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-sm"
           title={todo.person_name ?? ''}
-          aria-label={todo.person_name ?? ''}
         >
           {todo.person_emoji ?? '🙂'}
         </span>
       )}
+
       <button
         onClick={() => onToggle(todo.id)}
         aria-label={checked ? 'Mark not done' : 'Mark done'}
@@ -55,6 +97,27 @@ export default function TodoRow({ todo, onToggle, onDelete, showOwner }: Props) 
         {pastDue && <p className="text-xs font-bold text-rose-ink/80">Past due</p>}
       </div>
 
+      {/* Reactions — visible on completed todos */}
+      {done && onReact && (
+        <div className="flex shrink-0 items-center gap-1">
+          {reactionCounts.map(({ emoji, count, selfReacted }) => (
+            <button
+              key={emoji}
+              onClick={() => onReact(todo.id, emoji)}
+              className={`flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs font-bold transition ${
+                selfReacted
+                  ? 'bg-mint-card text-mint-ink'
+                  : 'bg-slate-100 text-slate-500 hover:bg-mint-card hover:text-mint-ink opacity-0 group-hover:opacity-100'
+              }`}
+              title={selfReacted ? 'Remove reaction' : `React with ${emoji}`}
+            >
+              {emoji}
+              {count > 0 && <span>{count}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
       {mutual && (
         <span
           className="flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-xs font-bold text-slate-500"
@@ -65,9 +128,7 @@ export default function TodoRow({ todo, onToggle, onDelete, showOwner }: Props) 
               {p.emoji}
             </span>
           ))}
-          <span className="ml-0.5">
-            {doneBy.length}/{people.length}
-          </span>
+          <span className="ml-0.5">{doneBy.length}/{people.length}</span>
         </span>
       )}
 

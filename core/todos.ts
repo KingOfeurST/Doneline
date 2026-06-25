@@ -1,6 +1,7 @@
 import { v4 as uuid } from 'uuid'
 import { getDb } from './db.js'
 import { primaryPersonId } from './people.js'
+import { logActivity } from './activityLog.js'
 import type { Todo, TodoWithGoal } from './types.js'
 
 const SELECT_WITH_GOAL = `
@@ -96,7 +97,9 @@ export function createTodo(input: {
     input.recurrence ?? null,
     input.recur_parent ?? null
   )
-  return getTodo(id)!
+  const t = getTodo(id)!
+  logActivity(t.person_id, 'todo:created', { title: t.title })
+  return t
 }
 
 export function updateTodo(
@@ -150,6 +153,7 @@ export function setTodoDone(id: string, done?: boolean, selfPersonId?: string): 
       fullyDone ? new Date().toISOString() : null,
       id
     )
+    if (shouldComplete) logActivity(self, 'todo:completed', { title: cur.title })
     return getTodo(id)
   }
 
@@ -158,6 +162,10 @@ export function setTodoDone(id: string, done?: boolean, selfPersonId?: string): 
     shouldComplete ? new Date().toISOString() : null,
     id
   )
+  if (shouldComplete) {
+    const self = selfPersonId || primaryPersonId()
+    logActivity(self, 'todo:completed', { title: cur.title })
+  }
   return getTodo(id)
 }
 
@@ -187,4 +195,11 @@ export function purgeArchivedOlderThan(days: number): number {
     .prepare('DELETE FROM todos WHERE archived = 1 AND completed_at IS NOT NULL AND completed_at < ?')
     .run(cutoff)
   return r.changes as number
+}
+
+/** Bulk-update positions after a drag-to-reorder. */
+export function reorderTodos(updates: { id: string; position: number }[]): void {
+  const db = getDb()
+  const stmt = db.prepare('UPDATE todos SET position = ? WHERE id = ?')
+  for (const u of updates) stmt.run(u.position, u.id)
 }

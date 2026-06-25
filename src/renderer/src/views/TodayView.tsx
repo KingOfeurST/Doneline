@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import type { CalEvent, TodoWithGoal } from '../../../shared/api'
+import type { CalEvent, Reaction, TodoWithGoal } from '../../../shared/api'
 import { useProfile } from '../profile'
 import TodoRow from '../components/TodoRow'
 import EventCard from '../components/EventCard'
@@ -17,15 +17,26 @@ export default function TodayView() {
   const [today, setToday] = useState('')
   const [todos, setTodos] = useState<TodoWithGoal[]>([])
   const [events, setEvents] = useState<CalEvent[]>([])
+  const [reactions, setReactions] = useState<Reaction[]>([])
   const [showTodo, setShowTodo] = useState(false)
   const [showEvent, setShowEvent] = useState(false)
   const [editEvent, setEditEvent] = useState<CalEvent | null>(null)
 
+  // Drag-to-reorder state
+  const dragId = useRef<string | null>(null)
+  const [overId, setOverId] = useState<string | null>(null)
+
   const load = useCallback(async () => {
     const day = await api.today()
     setToday(day)
-    setTodos(await api.todos.today(day, queryPersonId))
+    const loaded = await api.todos.today(day, queryPersonId)
+    setTodos(loaded)
     setEvents(await api.events.day(day, queryPersonId))
+    // Load reactions for all loaded todos
+    if (loaded.length > 0) {
+      const allReactions = await Promise.all(loaded.map((t) => api.reactions.list(t.id)))
+      setReactions(allReactions.flat())
+    }
   }, [queryPersonId, tick])
 
   useEffect(() => {
@@ -38,6 +49,14 @@ export default function TodayView() {
     if (!wasDone) playDing()
     load()
   }
+
+  async function react(todoId: string, emoji: string) {
+    await api.reactions.toggle(todoId, emoji)
+    // Refresh just the reactions for this todo
+    const updated = await api.reactions.list(todoId)
+    setReactions((prev) => [...prev.filter((r) => r.todo_id !== todoId), ...updated])
+  }
+
   async function removeTodo(id: string) {
     await api.todos.remove(id)
     load()
@@ -47,6 +66,28 @@ export default function TodayView() {
     load()
   }
 
+  // Drag-and-drop: compute new order and persist
+  function handleDragEnd() {
+    const fromId = dragId.current
+    const toId = overId
+    dragId.current = null
+    setOverId(null)
+    if (!fromId || !toId || fromId === toId) return
+
+    const fromIdx = todos.findIndex((t) => t.id === fromId)
+    const toIdx = todos.findIndex((t) => t.id === toId)
+    if (fromIdx === -1 || toIdx === -1) return
+
+    const reordered = [...todos]
+    const [moved] = reordered.splice(fromIdx, 1)
+    reordered.splice(toIdx, 0, moved)
+    setTodos(reordered)
+
+    const updates = reordered.map((t, i) => ({ id: t.id, position: i }))
+    api.todos.reorder(updates)
+  }
+
+  const reactionsFor = (todoId: string) => reactions.filter((r) => r.todo_id === todoId)
   const openCount = todos.filter((t) => !t.completed_at).length
 
   return (
@@ -113,7 +154,19 @@ export default function TodayView() {
         ) : (
           <div>
             {todos.map((t) => (
-              <TodoRow key={t.id} todo={t} onToggle={toggle} onDelete={removeTodo} showOwner={combined} />
+              <TodoRow
+                key={t.id}
+                todo={t}
+                onToggle={toggle}
+                onDelete={removeTodo}
+                onReact={react}
+                reactions={reactionsFor(t.id)}
+                showOwner={combined}
+                dragging={overId === t.id && dragId.current !== null && dragId.current !== t.id}
+                onDragStart={() => { dragId.current = t.id }}
+                onDragEnter={() => setOverId(t.id)}
+                onDragEnd={handleDragEnd}
+              />
             ))}
           </div>
         )}

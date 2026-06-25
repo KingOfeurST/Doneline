@@ -8,7 +8,9 @@ import type {
   NotifPrefs,
   Presence,
   FocusInvite,
-  FocusStats
+  FocusStats,
+  Reaction,
+  ActivityEntry
 } from '../../core/index.js'
 
 // Re-export the entity types so the renderer can import them from one place.
@@ -23,7 +25,9 @@ export type {
   Recurrence,
   Presence,
   FocusInvite,
-  FocusStats
+  FocusStats,
+  Reaction,
+  ActivityEntry
 } from '../../core/index.js'
 
 export interface SafeCalDavConfig {
@@ -75,6 +79,7 @@ export interface DonelineAPI {
     update(id: string, patch: Partial<Pick<Todo, 'title' | 'goal_id' | 'notes' | 'due_at' | 'position' | 'person_id'>>): Promise<TodoWithGoal | undefined>
     toggle(id: string, done?: boolean): Promise<TodoWithGoal | undefined>
     remove(id: string): Promise<void>
+    reorder(updates: { id: string; position: number }[]): Promise<void>
   }
 
   events: {
@@ -116,10 +121,20 @@ export interface DonelineAPI {
   focus: {
     record(input: { taskId?: string | null; durationSeconds: number; startedAt: string; endedAt: string }): Promise<boolean>
     stats(personId?: string): Promise<FocusStats>
+    sharedStreak(personIds: string[]): Promise<number>
     getTarget(): Promise<number>
     setTarget(n: number): Promise<boolean>
     /** Push live focus status to the tray (running, phase, seconds left). */
     tray(state: { running: boolean; phase: 'focus' | 'break'; secondsLeft: number } | null): void
+  }
+
+  reactions: {
+    toggle(todoId: string, emoji: string): Promise<boolean>
+    list(todoId: string): Promise<Reaction[]>
+  }
+
+  activity: {
+    list(limit?: number): Promise<ActivityEntry[]>
   }
 
   presence: {

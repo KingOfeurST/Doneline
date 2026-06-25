@@ -50,10 +50,13 @@ export function focusStats(personId: string): FocusStats {
   const today = byDay.get(todayKey) ?? { sessions: 0, seconds: 0 }
 
   let weekSeconds = 0
+  let weekSessions = 0
   for (let i = 0; i < 7; i++) {
     const d = new Date(now)
     d.setDate(d.getDate() - i)
-    weekSeconds += byDay.get(localDayKey(d))?.seconds ?? 0
+    const b = byDay.get(localDayKey(d))
+    weekSeconds += b?.seconds ?? 0
+    weekSessions += b?.sessions ?? 0
   }
 
   const targetMet = today.sessions >= target
@@ -73,9 +76,42 @@ export function focusStats(personId: string): FocusStats {
   return {
     todaySessions: today.sessions,
     todayMinutes: Math.round(today.seconds / 60),
+    weekSessions,
     weekMinutes: Math.round(weekSeconds / 60),
     target,
     targetMet,
     streak
   }
+}
+
+/** Days both people have met target consecutively — the "together streak". */
+export function sharedFocusStreak(personIds: string[]): number {
+  if (personIds.length < 2) return 0
+  const target = getDailyTarget()
+  const since = new Date(Date.now() - 90 * 86_400_000).toISOString()
+  const ph = personIds.map(() => '?').join(',')
+  const rows = getDb()
+    .prepare(`SELECT * FROM focus_sessions WHERE person_id IN (${ph}) AND ended_at >= ? ORDER BY ended_at`)
+    .all(...personIds, since) as FocusSession[]
+
+  const byPersonDay = new Map<string, Map<string, number>>()
+  for (const pid of personIds) byPersonDay.set(pid, new Map())
+  for (const r of rows) {
+    const key = localDayKey(new Date(r.ended_at))
+    const m = byPersonDay.get(r.person_id)!
+    m.set(key, (m.get(key) ?? 0) + 1)
+  }
+
+  const now = new Date()
+  let streak = 0
+  for (let i = 0; i < 90; i++) {
+    const d = new Date(now)
+    d.setDate(d.getDate() - i)
+    const key = localDayKey(d)
+    const allMet = personIds.every((pid) => (byPersonDay.get(pid)?.get(key) ?? 0) >= target)
+    if (allMet) streak++
+    else if (i === 0) continue // today still in progress
+    else break
+  }
+  return streak
 }

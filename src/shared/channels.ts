@@ -48,9 +48,15 @@ export const CH = {
 
   focusRecord: 'focus:record',
   focusStats: 'focus:stats',
+  focusSharedStreak: 'focus:sharedStreak',
   focusTargetGet: 'focus:targetGet',
   focusTargetSet: 'focus:targetSet',
   focusTray: 'focus:tray',
+
+  todoReorder: 'todos:reorder',
+  reactionsToggle: 'reactions:toggle',
+  reactionsList: 'reactions:list',
+  activityList: 'activity:list',
 
   presenceUpdate: 'presence:update',
   presenceList: 'presence:list',
