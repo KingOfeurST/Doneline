@@ -112,6 +112,13 @@ function fmtDate(iso: string): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
 }
 
+function fmtDatePlusOne(iso: string): string {
+  const d = new Date(iso)
+  d.setDate(d.getDate() + 1)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`
+}
+
 export function buildICS(input: {
   uid: string
   summary: string
@@ -122,12 +129,23 @@ export function buildICS(input: {
   allDay: boolean
 }): string {
   const now = fmtUtc(new Date().toISOString())
-  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Doneline//EN', 'BEGIN:VEVENT']
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'CALSCALE:GREGORIAN',
+    'PRODID:-//Doneline//Doneline//EN',
+    'BEGIN:VEVENT'
+  ]
   lines.push(`UID:${input.uid}`)
   lines.push(`DTSTAMP:${now}`)
   if (input.allDay) {
-    lines.push(`DTSTART;VALUE=DATE:${fmtDate(input.start)}`)
-    lines.push(`DTEND;VALUE=DATE:${fmtDate(input.end)}`)
+    const startDate = fmtDate(input.start)
+    const endDate = fmtDate(input.end)
+    // RFC 5545: DTEND for DATE values is exclusive (the day after the last day).
+    // iCloud rejects events where DTEND <= DTSTART.
+    const dtEnd = endDate <= startDate ? fmtDatePlusOne(input.start) : endDate
+    lines.push(`DTSTART;VALUE=DATE:${startDate}`)
+    lines.push(`DTEND;VALUE=DATE:${dtEnd}`)
   } else {
     lines.push(`DTSTART:${fmtUtc(input.start)}`)
     lines.push(`DTEND:${fmtUtc(input.end)}`)

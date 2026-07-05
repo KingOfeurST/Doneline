@@ -2,6 +2,7 @@ import { v4 as uuid } from 'uuid'
 import { createDAVClient, type DAVCalendar } from 'tsdav'
 
 type DAVClient = Awaited<ReturnType<typeof createDAVClient>>
+import { getDb } from './db.js'
 import { getCalDavConfig, setCalDavConfig, type CalDavConfig } from './settings.js'
 import { listEvents, createEvent, updateEvent, findByUid, getEvent } from './events.js'
 import { parseICS, buildICS } from './ics.js'
@@ -108,11 +109,26 @@ export async function syncCalendar(personId: string): Promise<SyncResult> {
     }
   }
 
+  // Cross-check: events the DB thinks are on the server but aren't in the pull results.
+  // This happens after a failed push (server rejected silently). Reset them so they get re-pushed.
+  const remoteUids = new Set(
+    objects
+      .map((o) => { try { return parseICS(o.data ?? '')?.uid } catch { return undefined } })
+      .filter(Boolean)
+  )
+  const db = getDb()
+  db.prepare(
+    `UPDATE events SET caldav_uid = NULL, caldav_url = NULL, caldav_etag = NULL, source = 'local'
+     WHERE person_id = ? AND source = 'caldav' AND caldav_uid NOT IN (${
+       remoteUids.size > 0 ? [...remoteUids].map(() => '?').join(',') : 'SELECT NULL'
+     })`
+  ).run(personId, ...(remoteUids.size > 0 ? [...remoteUids] : []))
+
   // --- PUSH ---
   const locals = listEvents({ personId }).filter((e) => e.source === 'local' && !e.caldav_uid)
   let pushed = 0
   for (const ev of locals) {
-    const uid = `${uuid()}@doneline`
+    const uid = `doneline-${uuid()}`
     const ics = buildICS({
       uid,
       summary: ev.title,
@@ -146,7 +162,7 @@ export async function pushEvent(eventId: string): Promise<void> {
 
   const client = await connect(cfg)
   const calendar = await pickCalendar(client, cfg)
-  const uid = `${uuid()}@doneline`
+  const uid = `doneline-${uuid()}`
   const ics = buildICS({
     uid,
     summary: ev.title,
