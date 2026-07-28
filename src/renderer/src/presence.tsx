@@ -3,7 +3,7 @@ import { api } from './api'
 import { useProfile } from './profile'
 import type { Person, Presence } from '../../shared/api'
 
-const STALE_MS = 60_000
+const STALE_MS = 120_000
 
 export interface FriendPresence {
   person: Person

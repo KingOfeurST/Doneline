@@ -9,7 +9,7 @@ export function setPresence(
   getDb()
     .prepare(
       `INSERT INTO presence (person_id, status, phase, task_title, ends_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, datetime('now'))
+       VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
        ON CONFLICT(person_id) DO UPDATE SET
          status = excluded.status, phase = excluded.phase,
          task_title = excluded.task_title, ends_at = excluded.ends_at,
