@@ -27,7 +27,9 @@ const api: DonelineAPI = {
     update: (id, patch) => ipcRenderer.invoke(CH.todoUpdate, id, patch),
     toggle: (id, done) => ipcRenderer.invoke(CH.todoToggle, id, done),
     remove: (id) => ipcRenderer.invoke(CH.todoDelete, id),
-    reorder: (updates) => ipcRenderer.invoke(CH.todoReorder, updates)
+    reorder: (updates) => ipcRenderer.invoke(CH.todoReorder, updates),
+    templates: () => ipcRenderer.invoke(CH.todoTemplatesList),
+    removeTemplate: (id) => ipcRenderer.invoke(CH.todoTemplateDelete, id)
   },
 
   events: {

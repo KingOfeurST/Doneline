@@ -55,5 +55,13 @@ export function updateGoal(
 }
 
 export function deleteGoal(id: string): void {
-  getDb().prepare('DELETE FROM goals WHERE id = ?').run(id)
+  const db = getDb()
+  // Kill recurring templates tied to this goal before the FK goes NULL.
+  const tplIds = (
+    db.prepare('SELECT id FROM todos WHERE goal_id = ? AND recurrence IS NOT NULL').all(id) as { id: string }[]
+  ).map((r) => r.id)
+  for (const tplId of tplIds) {
+    db.prepare('DELETE FROM todos WHERE id = ? OR recur_parent = ?').run(tplId, tplId)
+  }
+  db.prepare('DELETE FROM goals WHERE id = ?').run(id)
 }

@@ -60,6 +60,7 @@ import {
   toggleReaction,
   listReactionsForTodo,
   reorderTodos,
+  listTodoTemplates,
   listActivity,
   type CalDavConfig,
   type SyncConfig,
@@ -140,6 +141,11 @@ export function registerIpc(onWorkspaceChange: () => void): void {
   })
   ipcMain.handle(CH.todoReorder, (_e, updates: { id: string; position: number }[]) => {
     reorderTodos(updates)
+    push()
+  })
+  ipcMain.handle(CH.todoTemplatesList, () => listTodoTemplates())
+  ipcMain.handle(CH.todoTemplateDelete, (_e, id: string) => {
+    deleteTodo(id)
     push()
   })
 

@@ -54,6 +54,8 @@ export const CH = {
   focusTray: 'focus:tray',
 
   todoReorder: 'todos:reorder',
+  todoTemplatesList: 'todos:templates',
+  todoTemplateDelete: 'todos:templateDelete',
   reactionsToggle: 'reactions:toggle',
   reactionsList: 'reactions:list',
   activityList: 'activity:list',

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import type { CalendarInfo, SafeCalDavConfig, Person, WorkspaceStatus, NotifPrefs, TodoWithGoal } from '../../../shared/api'
+import type { CalendarInfo, SafeCalDavConfig, Person, WorkspaceStatus, NotifPrefs, Todo, TodoWithGoal } from '../../../shared/api'
 import { useProfile } from '../profile'
 import { PALETTE } from '../lib/colors'
 import { isMuted, setMuted, playDing } from '../lib/audioFx'
@@ -21,6 +21,7 @@ export default function SettingsView() {
       <PeopleSection people={people} reload={reloadPeople} />
       <IdentitySection people={people} />
       <CalendarSection people={people} initialPerson={active === 'all' ? people[0]?.id : active} />
+      <RecurringTasksSection />
       <ArchiveSection />
       <UpdatesSection />
       <ClaudeSection />
@@ -189,6 +190,74 @@ function SoundsSection() {
         </div>
         <Toggle checked={on} onChange={toggle} />
       </div>
+    </section>
+  )
+}
+
+/* ------------------------- Recurring tasks ---------------------------- */
+
+function RecurringTasksSection() {
+  const [templates, setTemplates] = useState<Todo[]>([])
+  const [open, setOpen] = useState(false)
+
+  async function load() {
+    setTemplates(await api.todos.templates())
+  }
+
+  useEffect(() => {
+    if (open) load()
+  }, [open])
+
+  async function remove(id: string) {
+    await api.todos.removeTemplate(id)
+    load()
+  }
+
+  function label(t: Todo): string {
+    const rec = t.recurrence ? (() => { try { return JSON.parse(t.recurrence!) } catch { return null } })() : null
+    if (!rec) return ''
+    if (rec.freq === 'daily') return 'Daily'
+    if (rec.freq === 'weekly') {
+      const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+      return (rec.days ?? []).map((d: number) => names[d]).join(', ')
+    }
+    return rec.freq
+  }
+
+  return (
+    <section className="card space-y-3 p-7">
+      <button className="flex w-full items-center justify-between" onClick={() => setOpen((o) => !o)}>
+        <div className="text-left">
+          <h2 className="text-xl font-extrabold text-ink">Recurring tasks</h2>
+          <p className="mt-1 text-sm font-semibold text-slate-500">
+            Active repeat rules. Delete a rule to stop future instances from being created.
+          </p>
+        </div>
+        <span className="text-slate-400">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        templates.length === 0 ? (
+          <p className="py-4 text-center text-sm font-semibold text-slate-400">No recurring tasks.</p>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {templates.map((t) => (
+              <div key={t.id} className="flex items-center justify-between py-2.5">
+                <div>
+                  <span className="font-bold text-ink">{t.title}</span>
+                  <span className="ml-2 text-xs font-semibold text-slate-400">{label(t)}</span>
+                </div>
+                <button
+                  className="ml-3 shrink-0 rounded-xl px-3 py-1.5 text-sm font-bold text-rose-ink transition hover:bg-rose-card"
+                  onClick={() => remove(t.id)}
+                >
+                  Delete
+                </button>
+              </div>
+            ))}
+          </div>
+        )
+      )}
     </section>
   )
 }
