@@ -4,7 +4,6 @@ import { playClick } from './lib/audioFx'
 import TodayView from './views/TodayView'
 import CalendarView from './views/CalendarView'
 import GoalsView from './views/GoalsView'
-import ActivityView from './views/ActivityView'
 import SettingsView from './views/SettingsView'
 import StartScreen from './components/StartScreen'
 import ProfileSwitcher from './components/ProfileSwitcher'
@@ -17,13 +16,12 @@ import CommandPalette from './components/CommandPalette'
 import { ProfileProvider } from './profile'
 import { FocusProvider, useFocus } from './focus'
 
-type Tab = 'today' | 'calendar' | 'goals' | 'activity' | 'settings'
+type Tab = 'today' | 'calendar' | 'goals' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'today', label: 'Today' },
   { id: 'calendar', label: 'Calendar' },
   { id: 'goals', label: 'Goals' },
-  { id: 'activity', label: 'Activity' },
   { id: 'settings', label: 'Settings' }
 ]
 
@@ -116,7 +114,6 @@ function AppInner() {
           {tab === 'today' && <TodayView />}
           {tab === 'calendar' && <CalendarView />}
           {tab === 'goals' && <GoalsView />}
-          {tab === 'activity' && <ActivityView />}
           {tab === 'settings' && <SettingsView />}
         </main>
       </div>

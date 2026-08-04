@@ -3,7 +3,7 @@ import { api } from '../api'
 import type { TodoWithGoal } from '../../../shared/api'
 import { useProfile } from '../profile'
 
-type Tab = 'today' | 'calendar' | 'goals' | 'activity' | 'settings'
+type Tab = 'today' | 'calendar' | 'goals' | 'settings'
 
 interface Props {
   open: boolean
@@ -44,7 +44,6 @@ export default function CommandPalette({ open, onClose, onNavigate, onFocus }: P
     { id: 'today', icon: '📅', label: 'Go to Today', action: () => { onNavigate('today'); onClose() } },
     { id: 'calendar', icon: '📆', label: 'Go to Calendar', action: () => { onNavigate('calendar'); onClose() } },
     { id: 'goals', icon: '🎯', label: 'Go to Goals', action: () => { onNavigate('goals'); onClose() } },
-    { id: 'activity', icon: '📋', label: 'Go to Activity', action: () => { onNavigate('activity'); onClose() } },
     { id: 'settings', icon: '⚙️', label: 'Go to Settings', action: () => { onNavigate('settings'); onClose() } },
     { id: 'focus', icon: '🎯', label: 'Start Focus Session', action: () => { onFocus(); onClose() } }
   ]

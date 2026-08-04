@@ -61,7 +61,6 @@ import {
   listReactionsForTodo,
   reorderTodos,
   listTodoTemplates,
-  listActivity,
   type CalDavConfig,
   type SyncConfig,
   type NotifPrefs
@@ -310,7 +309,4 @@ export function registerIpc(onWorkspaceChange: () => void): void {
     return added
   })
   ipcMain.handle(CH.reactionsList, (_e, todoId: string) => listReactionsForTodo(todoId))
-
-  // Activity log
-  ipcMain.handle(CH.activityList, (_e, limit?: number) => listActivity(limit))
 }

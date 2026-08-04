@@ -100,10 +100,6 @@ const api: DonelineAPI = {
     list: (todoId) => ipcRenderer.invoke(CH.reactionsList, todoId)
   },
 
-  activity: {
-    list: (limit) => ipcRenderer.invoke(CH.activityList, limit)
-  },
-
   presence: {
     getSelf: () => ipcRenderer.invoke(CH.selfGet),
     getSelfRaw: () => ipcRenderer.invoke(CH.selfRaw),

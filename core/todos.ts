@@ -1,7 +1,6 @@
 import { v4 as uuid } from 'uuid'
 import { getDb } from './db.js'
 import { primaryPersonId } from './people.js'
-import { logActivity } from './activityLog.js'
 import type { Todo, TodoWithGoal } from './types.js'
 
 const SELECT_WITH_GOAL = `
@@ -97,9 +96,7 @@ export function createTodo(input: {
     input.recurrence ?? null,
     input.recur_parent ?? null
   )
-  const t = getTodo(id)!
-  logActivity(t.person_id, 'todo:created', { title: t.title })
-  return t
+  return getTodo(id)!
 }
 
 export function updateTodo(
@@ -153,7 +150,6 @@ export function setTodoDone(id: string, done?: boolean, selfPersonId?: string): 
       fullyDone ? new Date().toISOString() : null,
       id
     )
-    if (shouldComplete) logActivity(self, 'todo:completed', { title: cur.title })
     return getTodo(id)
   }
 
@@ -162,18 +158,14 @@ export function setTodoDone(id: string, done?: boolean, selfPersonId?: string): 
     shouldComplete ? new Date().toISOString() : null,
     id
   )
-  if (shouldComplete) {
-    const self = selfPersonId || primaryPersonId()
-    logActivity(self, 'todo:completed', { title: cur.title })
-  }
   return getTodo(id)
 }
 
 export function deleteTodo(id: string): void {
-  // Deleting a template removes its future instances too.
   const db = getDb()
+  // Clean up completions for the template and all its instances before deleting todos.
+  db.prepare('DELETE FROM todo_completions WHERE todo_id = ? OR todo_id IN (SELECT id FROM todos WHERE recur_parent = ?)').run(id, id)
   db.prepare('DELETE FROM todos WHERE id = ? OR recur_parent = ?').run(id, id)
-  db.prepare('DELETE FROM todo_completions WHERE todo_id = ?').run(id)
 }
 
 /** Archive todos completed before `dayISO` (kept in DB, hidden from lists). */

@@ -119,16 +119,6 @@ export interface Reaction {
   created_at: string
 }
 
-export interface ActivityEntry {
-  id: string
-  person_id: string
-  action: string
-  payload: string
-  created_at: string
-  person_name?: string
-  person_emoji?: string
-}
-
 export interface FocusInvite {
   id: string
   from_person: string

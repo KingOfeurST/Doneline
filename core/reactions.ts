@@ -11,7 +11,7 @@ export function toggleReaction(todoId: string, personId: string, emoji: string):
     db.prepare('DELETE FROM reactions WHERE todo_id = ? AND person_id = ? AND emoji = ?').run(todoId, personId, emoji)
     return false
   }
-  db.prepare('INSERT OR IGNORE INTO reactions (id, todo_id, person_id, emoji) VALUES (?, ?, ?, ?)').run(
+  db.prepare("INSERT OR IGNORE INTO reactions (id, todo_id, person_id, emoji, created_at) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))").run(
     uuid(), todoId, personId, emoji
   )
   return true

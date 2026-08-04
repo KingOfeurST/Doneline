@@ -9,8 +9,7 @@ import type {
   Presence,
   FocusInvite,
   FocusStats,
-  Reaction,
-  ActivityEntry
+  Reaction
 } from '../../core/index.js'
 
 // Re-export the entity types so the renderer can import them from one place.
@@ -26,8 +25,7 @@ export type {
   Presence,
   FocusInvite,
   FocusStats,
-  Reaction,
-  ActivityEntry
+  Reaction
 } from '../../core/index.js'
 
 export interface SafeCalDavConfig {
@@ -133,10 +131,6 @@ export interface DonelineAPI {
   reactions: {
     toggle(todoId: string, emoji: string): Promise<boolean>
     list(todoId: string): Promise<Reaction[]>
-  }
-
-  activity: {
-    list(limit?: number): Promise<ActivityEntry[]>
   }
 
   presence: {

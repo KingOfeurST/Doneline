@@ -58,7 +58,6 @@ export const CH = {
   todoTemplateDelete: 'todos:templateDelete',
   reactionsToggle: 'reactions:toggle',
   reactionsList: 'reactions:list',
-  activityList: 'activity:list',
 
   presenceUpdate: 'presence:update',
   presenceList: 'presence:list',
