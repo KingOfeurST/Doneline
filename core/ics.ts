@@ -38,10 +38,12 @@ function escapeText(v: string): string {
 /** Parse an ICS date/time value into ISO. Handles UTC (Z), floating, and DATE. */
 function parseDate(value: string, isDateOnly: boolean): { iso: string; allDay: boolean } {
   if (isDateOnly || /^\d{8}$/.test(value)) {
-    const y = value.slice(0, 4)
-    const m = value.slice(4, 6)
-    const d = value.slice(6, 8)
-    return { iso: `${y}-${m}-${d}T00:00:00`, allDay: true }
+    const y = Number(value.slice(0, 4))
+    const m = Number(value.slice(4, 6))
+    const d = Number(value.slice(6, 8))
+    // Store local midnight as UTC, matching how the app's own all-day events are
+    // written. A naive string here would be read back as UTC and shift the day.
+    return { iso: new Date(y, m - 1, d).toISOString(), allDay: true }
   }
   const m = value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})(Z)?$/)
   if (!m) return { iso: new Date(value).toISOString(), allDay: false }

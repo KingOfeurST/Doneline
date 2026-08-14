@@ -32,6 +32,14 @@ function dayStr(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
+/** End of the given local day as a UTC ISO string. Every other writer stores
+ *  due_at as UTC ISO, so instances must match or date comparisons break. */
+function endOfLocalDayISO(d: Date): string {
+  const end = new Date(d)
+  end.setHours(23, 59, 0, 0)
+  return end.toISOString()
+}
+
 /** Ensure each matching recurring-todo template has an instance for `day`. */
 function ensureTodoInstances(day: Date): void {
   const db = getDb()
@@ -40,7 +48,9 @@ function ensureTodoInstances(day: Date): void {
     const rec = parseRec(tpl.recurrence)
     if (!rec || !matches(rec, day)) continue
     const exists = db
-      .prepare('SELECT 1 FROM todos WHERE recur_parent = ? AND date(due_at) = date(?) LIMIT 1')
+      .prepare(
+        "SELECT 1 FROM todos WHERE recur_parent = ? AND date(due_at, 'localtime') = date(?) LIMIT 1"
+      )
       .get(tpl.id, ds)
     if (exists) continue
     createTodo({
@@ -48,7 +58,7 @@ function ensureTodoInstances(day: Date): void {
       person_id: tpl.person_id,
       goal_id: tpl.goal_id,
       notes: tpl.notes,
-      due_at: `${ds}T23:59:00`, // due end of that day
+      due_at: endOfLocalDayISO(day), // due end of that local day
       recur_parent: tpl.id
     })
   }
@@ -69,7 +79,9 @@ function ensureEventInstances(): void {
       if (!matches(rec, d)) continue
       const ds = dayStr(d)
       const exists = db
-        .prepare('SELECT 1 FROM events WHERE recur_parent = ? AND date(starts_at) = date(?) LIMIT 1')
+        .prepare(
+          "SELECT 1 FROM events WHERE recur_parent = ? AND date(starts_at, 'localtime') = date(?) LIMIT 1"
+        )
         .get(tpl.id, ds)
       if (exists) continue
       const start = new Date(d)

@@ -35,12 +35,19 @@ export function listTodos(
   return getDb().prepare(sql).all(...p.args) as TodoWithGoal[]
 }
 
-/** Todos open or completed today, plus anything due today. Excludes templates/archived. */
+/** Todos open or completed today, plus anything due today. Excludes templates/archived.
+ *
+ *  `due_at` and `completed_at` are stored as UTC ISO strings, but `dayISO` is a
+ *  local calendar day, so the stored values must be converted with 'localtime'
+ *  before comparing. Without it, anything timestamped between midnight and the
+ *  UTC offset (e.g. 00:30 in Paris) resolves to the previous day and disappears. */
 export function listTodayTodos(dayISO: string, personId?: string): TodoWithGoal[] {
   const p = personClause(personId)
   const where = and(
     VISIBLE,
-    '(t.completed_at IS NULL OR date(t.completed_at) = date(?) OR date(t.due_at) = date(?))',
+    `(t.completed_at IS NULL
+       OR date(t.completed_at, 'localtime') = date(?)
+       OR date(t.due_at, 'localtime') = date(?))`,
     p.sql
   )
   const sql = `${SELECT_WITH_GOAL} ${where}
@@ -169,13 +176,15 @@ export function deleteTodo(id: string): void {
   db.prepare('DELETE FROM todos WHERE id = ? OR recur_parent = ?').run(id, id)
 }
 
-/** Archive todos completed before `dayISO` (kept in DB, hidden from lists). */
+/** Archive todos completed before `dayISO` (kept in DB, hidden from lists).
+ *  Uses 'localtime' so a todo finished just after midnight isn't archived on the
+ *  same night it was completed. */
 export function archiveDoneBefore(dayISO: string): number {
   const r = getDb()
     .prepare(
       `UPDATE todos SET archived = 1
        WHERE archived = 0 AND recurrence IS NULL
-         AND completed_at IS NOT NULL AND date(completed_at) < date(?)`
+         AND completed_at IS NOT NULL AND date(completed_at, 'localtime') < date(?)`
     )
     .run(dayISO)
   return r.changes as number

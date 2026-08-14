@@ -30,18 +30,26 @@ export function listEvents(opts: { from?: string; to?: string; personId?: string
     .all(...args) as CalEvent[]
 }
 
-/** Events overlapping a given calendar day (local date string YYYY-MM-DD). */
+/** Events overlapping a given calendar day (local date string YYYY-MM-DD).
+ *
+ *  Timestamps are stored as UTC, so they're converted with 'localtime' before
+ *  being matched against the local day. Comparing the raw UTC values against
+ *  local day bounds made events near midnight land on the wrong day, or show up
+ *  on two days at once. SQLite's datetime() renders "YYYY-MM-DD HH:MM:SS", so
+ *  the bounds use a space separator to match. */
 export function listDayEvents(dayISO: string, personId?: string): CalEvent[] {
-  const start = `${dayISO}T00:00:00`
-  const end = `${dayISO}T23:59:59`
+  const start = `${dayISO} 00:00:00`
+  const end = `${dayISO} 23:59:59`
   const p = personFilter(personId)
   const extra = p.sql ? ` AND ${p.sql}` : ''
   return getDb()
     .prepare(
       `SELECT * FROM events
        WHERE ${NOT_TEMPLATE} AND (
-         (all_day = 1 AND date(starts_at) = date(?))
-         OR (all_day = 0 AND starts_at <= ? AND ends_at >= ?)
+         (all_day = 1 AND date(starts_at, 'localtime') = date(?))
+         OR (all_day = 0
+             AND datetime(starts_at, 'localtime') <= ?
+             AND datetime(ends_at, 'localtime') >= ?)
        )${extra}
        ORDER BY all_day DESC, starts_at`
     )
