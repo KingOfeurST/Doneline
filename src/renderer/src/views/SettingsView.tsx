@@ -218,7 +218,7 @@ function recLabel(t: Todo): string {
 }
 
 function RecurringTasksSection() {
-  const [templates, setTemplates] = useState<Todo[]>([])
+  const [templates, setTemplates] = useState<TodoWithGoal[]>([])
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
@@ -235,7 +235,7 @@ function RecurringTasksSection() {
     load()
   }
 
-  function startEdit(t: Todo) {
+  function startEdit(t: TodoWithGoal) {
     setEditing(t.id)
     setEditTitle(t.title)
     setEditRec(parseRec(t.recurrence))
@@ -290,9 +290,23 @@ function RecurringTasksSection() {
                   </div>
                 ) : (
                   <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate font-bold text-ink">{t.title}</p>
-                      <p className="text-xs font-semibold text-slate-400">{recLabel(t)}</p>
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-base"
+                        style={{ background: (t.goal_color || '#2f7a4d') + '22' }}
+                        title={t.person_name ?? 'Unassigned'}
+                      >
+                        {t.person_emoji ?? '🙂'}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="truncate font-bold text-ink">{t.title}</p>
+                        <p className="truncate text-xs font-semibold text-slate-400">
+                          {t.person_name ?? 'Unassigned'} · {recLabel(t)}
+                          {t.goal_title && (
+                            <span style={{ color: t.goal_color ?? undefined }}> · {t.goal_title}</span>
+                          )}
+                        </p>
+                      </div>
                     </div>
                     <div className="flex shrink-0 gap-2">
                       <button

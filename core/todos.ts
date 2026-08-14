@@ -64,11 +64,12 @@ export function listArchivedTodos(personId?: string): TodoWithGoal[] {
     .all(...p.args) as TodoWithGoal[]
 }
 
-/** Recurrence templates (the repeat rules). */
-export function listTodoTemplates(): Todo[] {
+/** Recurrence templates (the repeat rules), with owner and goal joined in so the
+ *  settings list can show whose rule it is. */
+export function listTodoTemplates(): TodoWithGoal[] {
   return getDb()
-    .prepare('SELECT * FROM todos WHERE recurrence IS NOT NULL ORDER BY created_at')
-    .all() as Todo[]
+    .prepare(`${SELECT_WITH_GOAL} WHERE t.recurrence IS NOT NULL ORDER BY t.created_at`)
+    .all() as TodoWithGoal[]
 }
 
 export function getTodo(id: string): TodoWithGoal | undefined {

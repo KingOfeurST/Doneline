@@ -130,7 +130,10 @@ export default function TodayView() {
         </div>
       )}
 
-      <section className="card rise p-7" style={{ animationDelay: '80ms' }}>
+      {/* Todos and today's note sit side by side on wide screens; the note stays
+          in view while the list scrolls. Stacks on narrow windows. */}
+      <div className="grid items-start gap-5 lg:grid-cols-3">
+      <section className="card rise p-7 lg:col-span-2" style={{ animationDelay: '80ms' }}>
         <div className="mb-2 flex items-center justify-between">
           <h2 className="text-2xl font-extrabold text-ink">Todo</h2>
           <button
@@ -206,7 +209,12 @@ export default function TodayView() {
         </button>
       </section>
 
-      {today && <DailyNote day={today} />}
+        {today && (
+          <div className="lg:sticky lg:top-6">
+            <DailyNote day={today} />
+          </div>
+        )}
+      </div>
 
       <AddTodoModal
         open={showTodo}

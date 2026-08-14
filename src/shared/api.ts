@@ -90,7 +90,7 @@ export interface DonelineAPI {
     toggle(id: string, done?: boolean): Promise<TodoWithGoal | undefined>
     remove(id: string): Promise<void>
     reorder(updates: { id: string; position: number }[]): Promise<void>
-    templates(): Promise<Todo[]>
+    templates(): Promise<TodoWithGoal[]>
     removeTemplate(id: string): Promise<void>
   }
 
