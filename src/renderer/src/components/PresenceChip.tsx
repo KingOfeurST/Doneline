@@ -43,6 +43,17 @@ export default function PresenceChip() {
     }
   }, [])
 
+  // Closing the popover abandons any receipt watch, so reopening always shows
+  // the action buttons rather than a stale "Delivered ✓" from last time.
+  useEffect(() => {
+    if (open) return
+    if (receiptTimer.current) {
+      clearInterval(receiptTimer.current)
+      receiptTimer.current = null
+    }
+    setStatus(null)
+  }, [open])
+
   if (!cloud || friends.length === 0) return null
 
   // Prefer showing a friend who's currently focusing.

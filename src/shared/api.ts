@@ -61,8 +61,6 @@ export interface WorkspaceStatus {
 export interface DonelineAPI {
   today(): Promise<string>
   platform(): Promise<string>
-  /** Shake this window and flash the taskbar (MSN-style buzz). */
-  buzzWindow(): Promise<void>
 
   notes: {
     get(day: string, personId?: string): Promise<DailyNote>

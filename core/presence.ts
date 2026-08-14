@@ -30,8 +30,12 @@ export function sendNudge(
 ): Nudge {
   const db = getDb()
   const id = uuid()
+  // Explicit UTC ISO (matching presence/reactions/notes) rather than the column's
+  // datetime('now') default: that format is space-separated with no zone, which
+  // JS Date misparses as local time.
   db.prepare(
-    'INSERT INTO nudges (id, from_person, to_person, message, kind) VALUES (?, ?, ?, ?, ?)'
+    `INSERT INTO nudges (id, from_person, to_person, message, kind, created_at)
+     VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))`
   ).run(id, fromPerson, toPerson, message.trim(), kind)
   return db.prepare('SELECT * FROM nudges WHERE id = ?').get(id) as Nudge
 }
@@ -46,7 +50,7 @@ export function unseenNudgesFor(personId: string): Nudge[] {
        FROM nudges n
        LEFT JOIN people p ON p.id = n.from_person
        WHERE n.to_person = ? AND n.seen = 0
-         AND n.created_at > datetime('now', '-10 minutes')
+         AND n.created_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-10 minutes')
        ORDER BY n.created_at`
     )
     .all(personId) as Nudge[]

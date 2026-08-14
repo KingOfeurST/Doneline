@@ -257,7 +257,6 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(CH.appVersion, () => app.getVersion())
   ipcMain.handle(CH.appPlatform, () => process.platform)
-  ipcMain.handle(CH.windowBuzz, () => buzzWindow())
   ipcMain.handle(CH.updateCheck, async () => {
     if (!app.isPackaged) return { state: 'dev' as const }
     try {

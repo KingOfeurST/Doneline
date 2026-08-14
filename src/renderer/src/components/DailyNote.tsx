@@ -13,30 +13,58 @@ export default function DailyNote({ day }: { day: string }) {
   const [saved, setSaved] = useState(false)
   const loadedFor = useRef<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Latest unsaved text (and the day it belongs to) so the flush on unmount
+  // writes the right thing even after `day` has rolled over.
+  const pending = useRef<{ day: string; body: string } | null>(null)
 
-  // Load whenever the day changes. Guarded so a pending save isn't clobbered.
+  /** Write immediately and drop the pending debounce. */
+  function flush() {
+    if (timer.current) {
+      clearTimeout(timer.current)
+      timer.current = null
+    }
+    const p = pending.current
+    if (!p) return
+    pending.current = null
+    api.notes.set(p.day, p.body).catch(() => {})
+  }
+
+  // Load whenever the day changes. Flush first so text typed just before a
+  // midnight rollover is saved against the day it was written for.
   useEffect(() => {
     if (!day || loadedFor.current === day) return
+    flush()
     loadedFor.current = day
     api.notes.get(day).then((n) => {
       setBody(n.body)
       if (n.body.trim()) setOpen(true)
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [day])
 
+  // Save on unmount (tab switch) and on window close — a debounce that is merely
+  // cancelled would silently discard the last keystrokes.
   useEffect(() => {
+    window.addEventListener('beforeunload', flush)
     return () => {
-      if (timer.current) clearTimeout(timer.current)
+      window.removeEventListener('beforeunload', flush)
+      flush()
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function edit(next: string) {
     setBody(next)
     setSaved(false)
+    pending.current = { day, body: next }
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
+      timer.current = null
+      const p = pending.current
+      if (!p) return
+      pending.current = null
       api.notes
-        .set(day, next)
+        .set(p.day, p.body)
         .then(() => {
           setSaved(true)
           setTimeout(() => setSaved(false), 1500)

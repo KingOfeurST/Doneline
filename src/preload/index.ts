@@ -5,7 +5,6 @@ import type { DonelineAPI } from '../shared/api.js'
 const api: DonelineAPI = {
   today: () => ipcRenderer.invoke(CH.today),
   platform: () => ipcRenderer.invoke(CH.appPlatform),
-  buzzWindow: () => ipcRenderer.invoke(CH.windowBuzz),
 
   notes: {
     get: (day, personId) => ipcRenderer.invoke(CH.notesGet, day, personId),

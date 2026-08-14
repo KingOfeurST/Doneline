@@ -28,6 +28,7 @@ import {
   testConnection,
   syncCalendar,
   pushEvent,
+  deleteRemoteEvent,
   localDay,
   getSyncConfig,
   setSyncConfig,
@@ -174,7 +175,12 @@ export function registerIpc(onWorkspaceChange: () => void): void {
     push()
     return r
   })
-  ipcMain.handle(CH.eventDelete, (_e, id) => {
+  ipcMain.handle(CH.eventDelete, async (_e, id) => {
+    // Remove it from iCloud first, while the row still holds the CalDAV UID.
+    // Otherwise the next sync pulls the event back and it looks un-deleted.
+    await deleteRemoteEvent(id).catch((err) =>
+      console.error('[doneline] remote event delete failed:', err)
+    )
     deleteEvent(id)
     push()
   })

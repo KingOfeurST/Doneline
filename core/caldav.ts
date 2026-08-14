@@ -117,12 +117,18 @@ export async function syncCalendar(personId: string): Promise<SyncResult> {
       .filter(Boolean)
   )
   const db = getDb()
-  db.prepare(
-    `UPDATE events SET caldav_uid = NULL, caldav_url = NULL, caldav_etag = NULL, source = 'local'
-     WHERE person_id = ? AND source = 'caldav' AND caldav_uid NOT IN (${
-       remoteUids.size > 0 ? [...remoteUids].map(() => '?').join(',') : 'SELECT NULL'
-     })`
-  ).run(personId, ...(remoteUids.size > 0 ? [...remoteUids] : []))
+  const RESET = `UPDATE events SET caldav_uid = NULL, caldav_url = NULL, caldav_etag = NULL,
+                        source = 'local'
+                 WHERE person_id = ? AND source = 'caldav'`
+  if (remoteUids.size > 0) {
+    const ph = [...remoteUids].map(() => '?').join(',')
+    db.prepare(`${RESET} AND caldav_uid NOT IN (${ph})`).run(personId, ...remoteUids)
+  } else {
+    // Remote calendar is empty: everything local still marked 'caldav' is an
+    // orphan. `NOT IN (SELECT NULL)` evaluates to NULL and would match no rows,
+    // so this case needs its own statement.
+    db.prepare(RESET).run(personId)
+  }
 
   // --- PUSH ---
   const locals = listEvents({ personId }).filter((e) => e.source === 'local' && !e.caldav_uid)
@@ -151,6 +157,27 @@ export async function syncCalendar(personId: string): Promise<SyncResult> {
   }
 
   return { pulled, pushed, calendar: displayName(calendar), person: personId }
+}
+
+/**
+ * Remove an event from the remote calendar. Must run BEFORE the local row is
+ * deleted (it reads the row for its UID/URL). Without this the next sync pulls
+ * the event straight back from iCloud and it appears to un-delete itself.
+ *
+ * Best effort: a failure here shouldn't block the local delete.
+ */
+export async function deleteRemoteEvent(eventId: string): Promise<void> {
+  const ev = getEvent(eventId)
+  if (!ev || !ev.caldav_uid) return // never synced — nothing remote to remove
+  const cfg = getCalDavConfig(ev.person_id)
+  if (!cfg) return
+
+  const client = await connect(cfg)
+  const calendar = await pickCalendar(client, cfg)
+  const url = ev.caldav_url || (calendar.url ?? '') + `${ev.caldav_uid}.ics`
+  await client.deleteCalendarObject({
+    calendarObject: { url, etag: ev.caldav_etag ?? undefined }
+  })
 }
 
 /** Push a single local event immediately (used when adding from the app). */

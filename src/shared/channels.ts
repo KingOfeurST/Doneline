@@ -68,7 +68,6 @@ export const CH = {
   nudgesUnseen: 'presence:nudgesUnseen',
   nudgeSeen: 'presence:nudgeSeen',
   nudgeWasSeen: 'presence:nudgeWasSeen',
-  windowBuzz: 'app:buzz',
   inviteSend: 'presence:invite',
   invitesPending: 'presence:invitesPending',
   inviteSeen: 'presence:inviteSeen',

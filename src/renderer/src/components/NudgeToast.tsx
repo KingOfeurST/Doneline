@@ -15,21 +15,38 @@ const AUTO_DISMISS_MS = 8000
 export default function NudgeToast() {
   const [queue, setQueue] = useState<Nudge[]>([])
   const seenRef = useRef<Set<string>>(new Set())
+  // The 5s poll and the workspace:changed listener can fire together; without a
+  // guard two in-flight checks could both claim the same nudge.
+  const inFlight = useRef(false)
 
   const check = useCallback(async () => {
-    const unseen = await api.presence.unseenNudges()
-    const fresh = unseen.filter((n) => !seenRef.current.has(n.id))
-    if (fresh.length === 0) return
+    if (inFlight.current) return
+    inFlight.current = true
+    try {
+      const unseen = await api.presence.unseenNudges()
+      const fresh = unseen.filter((n) => !seenRef.current.has(n.id))
+      if (fresh.length === 0) return
 
-    for (const n of fresh) seenRef.current.add(n.id)
-    setQueue((q) => [...q, ...fresh])
+      for (const n of fresh) seenRef.current.add(n.id)
+      setQueue((q) => [...q, ...fresh])
 
-    // Sound once per batch rather than once per nudge, so a burst isn't deafening.
-    if (fresh.some((n) => n.kind === 'buzz')) playBuzz()
-    else playNudge()
+      // Sound once per batch rather than once per nudge, so a burst isn't deafening.
+      if (fresh.some((n) => n.kind === 'buzz')) playBuzz()
+      else playNudge()
 
-    // Displayed → safe to clear server-side.
-    for (const n of fresh) api.presence.markNudgeSeen(n.id).catch(() => {})
+      // Displayed → safe to clear server-side. If the write fails, forget the id
+      // so the next poll retries; otherwise the sender would wait on a delivery
+      // receipt that can never arrive.
+      for (const n of fresh) {
+        try {
+          await api.presence.markNudgeSeen(n.id)
+        } catch {
+          seenRef.current.delete(n.id)
+        }
+      }
+    } finally {
+      inFlight.current = false
+    }
   }, [])
 
   useEffect(() => {
