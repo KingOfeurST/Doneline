@@ -217,6 +217,7 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.handle(CH.appVersion, () => app.getVersion())
+  ipcMain.handle(CH.appPlatform, () => process.platform)
   ipcMain.handle(CH.updateCheck, async () => {
     if (!app.isPackaged) return { state: 'dev' as const }
     try {
@@ -227,6 +228,11 @@ app.whenReady().then(async () => {
     }
   })
   ipcMain.handle(CH.updateInstall, () => {
+    if (process.platform === 'darwin') {
+      // macOS requires code signing for auto-install — open the releases page instead.
+      shell.openExternal('https://github.com/KingOfeurST/Doneline/releases/latest')
+      return
+    }
     isQuitting = true
     autoUpdater.quitAndInstall()
   })

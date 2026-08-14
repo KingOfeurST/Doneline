@@ -80,7 +80,7 @@
       "icon": "build/icon.ico"
     },
     "mac": {
-      "target": "dmg",
+      "target": ["dmg", "zip"],
       "category": "public.app-category.productivity",
       "icon": "build/icon.icns"
     }

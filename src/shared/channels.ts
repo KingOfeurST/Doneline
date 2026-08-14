@@ -72,7 +72,8 @@ export const CH = {
   inviteStart: 'presence:inviteStart',
   inviteActive: 'presence:inviteActive',
 
-  today: 'app:today'
+  today: 'app:today',
+  appPlatform: 'app:platform'
 } as const
 
 /** Main → renderer push events. */

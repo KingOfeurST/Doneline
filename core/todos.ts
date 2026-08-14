@@ -101,13 +101,13 @@ export function createTodo(input: {
 
 export function updateTodo(
   id: string,
-  patch: Partial<Pick<Todo, 'title' | 'goal_id' | 'notes' | 'due_at' | 'position' | 'person_id'>>
+  patch: Partial<Pick<Todo, 'title' | 'goal_id' | 'notes' | 'due_at' | 'position' | 'person_id' | 'recurrence'>>
 ): TodoWithGoal | undefined {
   const db = getDb()
   const cur = getTodo(id)
   if (!cur) return undefined
   db.prepare(
-    'UPDATE todos SET title = ?, goal_id = ?, notes = ?, due_at = ?, position = ?, person_id = ? WHERE id = ?'
+    'UPDATE todos SET title = ?, goal_id = ?, notes = ?, due_at = ?, position = ?, person_id = ?, recurrence = ? WHERE id = ?'
   ).run(
     patch.title ?? cur.title,
     patch.goal_id === undefined ? cur.goal_id : patch.goal_id,
@@ -115,6 +115,7 @@ export function updateTodo(
     patch.due_at === undefined ? cur.due_at : patch.due_at,
     patch.position ?? cur.position,
     patch.person_id ?? cur.person_id,
+    patch.recurrence === undefined ? cur.recurrence : patch.recurrence,
     id
   )
   return getTodo(id)

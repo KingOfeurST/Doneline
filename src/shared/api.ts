@@ -54,6 +54,7 @@ export interface WorkspaceStatus {
 /** The surface exposed on `window.doneline` by the preload bridge. */
 export interface DonelineAPI {
   today(): Promise<string>
+  platform(): Promise<string>
 
   people: {
     list(): Promise<Person[]>
@@ -74,7 +75,7 @@ export interface DonelineAPI {
     today(day?: string, personId?: string): Promise<TodoWithGoal[]>
     archived(personId?: string): Promise<TodoWithGoal[]>
     create(input: { title: string; person_id?: string; goal_id?: string | null; notes?: string | null; due_at?: string | null; recurrence?: string | null }): Promise<TodoWithGoal>
-    update(id: string, patch: Partial<Pick<Todo, 'title' | 'goal_id' | 'notes' | 'due_at' | 'position' | 'person_id'>>): Promise<TodoWithGoal | undefined>
+    update(id: string, patch: Partial<Pick<Todo, 'title' | 'goal_id' | 'notes' | 'due_at' | 'position' | 'person_id' | 'recurrence'>>): Promise<TodoWithGoal | undefined>
     toggle(id: string, done?: boolean): Promise<TodoWithGoal | undefined>
     remove(id: string): Promise<void>
     reorder(updates: { id: string; position: number }[]): Promise<void>

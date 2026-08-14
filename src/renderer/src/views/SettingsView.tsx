@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
-import type { CalendarInfo, SafeCalDavConfig, Person, WorkspaceStatus, NotifPrefs, Todo, TodoWithGoal } from '../../../shared/api'
+import type { CalendarInfo, SafeCalDavConfig, Person, WorkspaceStatus, NotifPrefs, Recurrence, Todo, TodoWithGoal } from '../../../shared/api'
+import RecurrencePicker from '../components/RecurrencePicker'
 import { useProfile } from '../profile'
 import { PALETTE } from '../lib/colors'
 import { isMuted, setMuted, playDing } from '../lib/audioFx'
@@ -33,24 +34,28 @@ export default function SettingsView() {
 
 function UpdatesSection() {
   const [version, setVersion] = useState('')
+  const [platform, setPlatform] = useState('')
   const [msg, setMsg] = useState('')
   const [downloaded, setDownloaded] = useState(false)
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     api.updates.version().then(setVersion)
+    api.platform().then(setPlatform)
     return api.updates.onStatus((s) => {
       setBusy(s.state === 'checking' || s.state === 'downloading')
       if (s.state === 'checking') setMsg('Checking…')
       else if (s.state === 'available') setMsg(`Update ${s.version ?? ''} found — downloading…`)
       else if (s.state === 'downloading') setMsg(`Downloading… ${s.percent ?? 0}%`)
       else if (s.state === 'downloaded') {
-        setMsg(`Update ${s.version ?? ''} ready.`)
+        setMsg(platform === 'darwin'
+          ? `Update ${s.version ?? ''} ready. Click below to open the downloads page.`
+          : `Update ${s.version ?? ''} ready.`)
         setDownloaded(true)
       } else if (s.state === 'not-available') setMsg("You're on the latest version 🎉")
       else if (s.state === 'error') setMsg(`Couldn't check: ${s.message ?? 'unknown error'}`)
     })
-  }, [])
+  }, [platform])
 
   async function check() {
     setBusy(true)
@@ -86,7 +91,7 @@ function UpdatesSection() {
         </button>
         {downloaded && (
           <button className="btn-primary" onClick={() => api.updates.install()}>
-            Restart &amp; update
+            {platform === 'darwin' ? 'Open downloads page' : 'Restart & update'}
           </button>
         )}
       </div>
@@ -196,32 +201,57 @@ function SoundsSection() {
 
 /* ------------------------- Recurring tasks ---------------------------- */
 
+function parseRec(json: string | null): Recurrence | null {
+  if (!json) return null
+  try { return JSON.parse(json) as Recurrence } catch { return null }
+}
+
+function recLabel(t: Todo): string {
+  const rec = parseRec(t.recurrence)
+  if (!rec) return ''
+  if (rec.freq === 'daily') return 'Every day'
+  if (rec.freq === 'weekly') {
+    const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    return (rec.days ?? []).map((d: number) => names[d]).join(', ')
+  }
+  return rec.freq
+}
+
 function RecurringTasksSection() {
   const [templates, setTemplates] = useState<Todo[]>([])
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [editTitle, setEditTitle] = useState('')
+  const [editRec, setEditRec] = useState<Recurrence | null>(null)
 
   async function load() {
     setTemplates(await api.todos.templates())
   }
 
-  useEffect(() => {
-    if (open) load()
-  }, [open])
+  useEffect(() => { if (open) load() }, [open])
 
   async function remove(id: string) {
     await api.todos.removeTemplate(id)
     load()
   }
 
-  function label(t: Todo): string {
-    const rec = t.recurrence ? (() => { try { return JSON.parse(t.recurrence!) } catch { return null } })() : null
-    if (!rec) return ''
-    if (rec.freq === 'daily') return 'Daily'
-    if (rec.freq === 'weekly') {
-      const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-      return (rec.days ?? []).map((d: number) => names[d]).join(', ')
-    }
-    return rec.freq
+  function startEdit(t: Todo) {
+    setEditing(t.id)
+    setEditTitle(t.title)
+    setEditRec(parseRec(t.recurrence))
+  }
+
+  function cancelEdit() {
+    setEditing(null)
+  }
+
+  async function saveEdit(id: string) {
+    await api.todos.update(id, {
+      title: editTitle.trim() || undefined,
+      recurrence: editRec ? JSON.stringify(editRec) : null
+    })
+    setEditing(null)
+    load()
   }
 
   return (
@@ -230,7 +260,7 @@ function RecurringTasksSection() {
         <div className="text-left">
           <h2 className="text-xl font-extrabold text-ink">Recurring tasks</h2>
           <p className="mt-1 text-sm font-semibold text-slate-500">
-            Active repeat rules. Delete a rule to stop future instances from being created.
+            Active repeat rules. Edit or delete them here.
           </p>
         </div>
         <span className="text-slate-400">{open ? '▲' : '▼'}</span>
@@ -242,17 +272,44 @@ function RecurringTasksSection() {
         ) : (
           <div className="divide-y divide-slate-100">
             {templates.map((t) => (
-              <div key={t.id} className="flex items-center justify-between py-2.5">
-                <div>
-                  <span className="font-bold text-ink">{t.title}</span>
-                  <span className="ml-2 text-xs font-semibold text-slate-400">{label(t)}</span>
-                </div>
-                <button
-                  className="ml-3 shrink-0 rounded-xl px-3 py-1.5 text-sm font-bold text-rose-ink transition hover:bg-rose-card"
-                  onClick={() => remove(t.id)}
-                >
-                  Delete
-                </button>
+              <div key={t.id} className="py-3">
+                {editing === t.id ? (
+                  <div className="space-y-3">
+                    <input
+                      className="input w-full"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(t.id); if (e.key === 'Escape') cancelEdit() }}
+                      autoFocus
+                    />
+                    <RecurrencePicker value={editRec} onChange={setEditRec} />
+                    <div className="flex gap-2">
+                      <button className="btn-primary py-2 text-sm" onClick={() => saveEdit(t.id)}>Save</button>
+                      <button className="btn-soft py-2 text-sm" onClick={cancelEdit}>Cancel</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-ink">{t.title}</p>
+                      <p className="text-xs font-semibold text-slate-400">{recLabel(t)}</p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <button
+                        className="rounded-xl px-3 py-1.5 text-sm font-bold text-slate-500 transition hover:bg-slate-100"
+                        onClick={() => startEdit(t)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        className="rounded-xl px-3 py-1.5 text-sm font-bold text-rose-ink transition hover:bg-rose-card"
+                        onClick={() => remove(t.id)}
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

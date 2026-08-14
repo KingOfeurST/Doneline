@@ -4,6 +4,7 @@ import type { DonelineAPI } from '../shared/api.js'
 
 const api: DonelineAPI = {
   today: () => ipcRenderer.invoke(CH.today),
+  platform: () => ipcRenderer.invoke(CH.appPlatform),
 
   people: {
     list: () => ipcRenderer.invoke(CH.peopleList),

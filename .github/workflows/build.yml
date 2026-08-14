@@ -50,4 +50,5 @@ jobs:
           path: |
             release/*.exe
             release/*.dmg
+            release/*.zip
           if-no-files-found: ignore
