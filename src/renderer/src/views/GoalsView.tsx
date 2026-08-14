@@ -67,9 +67,13 @@ export default function GoalsView() {
 
       <div className="grid gap-5 md:grid-cols-2">
         {goals.map((g, i) => {
+          // Todos still visible today (archived ones have been swept out of this list).
           const linked = todos.filter((t) => t.goal_id === g.id)
-          const done = linked.filter((t) => t.completed_at).length
-          const pct = linked.length ? Math.round((done / linked.length) * 100) : 0
+          // Counts come from the DB and include archived todos, so progress
+          // doesn't reset when completed items get swept to the archive.
+          const total = g.todo_total
+          const done = g.todo_done
+          const pct = total ? Math.round((done / total) * 100) : 0
           const owner = personById(g.person_id)
           return (
             <section key={g.id} className="card rise lift p-6" style={{ animationDelay: `${i * 60}ms` }}>
@@ -106,12 +110,15 @@ export default function GoalsView() {
 
               <div className="mt-4">
                 <div className="mb-1 flex justify-between text-xs font-bold text-slate-400">
-                  <span>{done} / {linked.length} done</span>
-                  <span>{pct}%</span>
+                  <span>
+                    {done} / {total} done
+                    {total > 0 && done === total && <span className="ml-1 text-mint-ink">🎯</span>}
+                  </span>
+                  <span className={pct === 100 ? 'text-mint-ink' : ''}>{pct}%</span>
                 </div>
                 <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-100">
                   <div
-                    className="h-full rounded-full transition-all"
+                    className="h-full rounded-full transition-all duration-500"
                     style={{ width: `${pct}%`, background: g.color }}
                   />
                 </div>
@@ -119,7 +126,11 @@ export default function GoalsView() {
 
               <div className="mt-3">
                 {linked.length === 0 ? (
-                  <p className="py-4 text-sm font-semibold text-slate-400">No todos linked yet.</p>
+                  <p className="py-4 text-sm font-semibold text-slate-400">
+                    {total > 0
+                      ? `All ${total} todo${total === 1 ? '' : 's'} finished and archived.`
+                      : 'No todos linked yet.'}
+                  </p>
                 ) : (
                   linked.map((t) => (
                     <TodoRow key={t.id} todo={t} onToggle={toggle} onDelete={removeTodo} showOwner={combined} />

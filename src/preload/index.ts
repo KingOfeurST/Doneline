@@ -5,6 +5,12 @@ import type { DonelineAPI } from '../shared/api.js'
 const api: DonelineAPI = {
   today: () => ipcRenderer.invoke(CH.today),
   platform: () => ipcRenderer.invoke(CH.appPlatform),
+  buzzWindow: () => ipcRenderer.invoke(CH.windowBuzz),
+
+  notes: {
+    get: (day, personId) => ipcRenderer.invoke(CH.notesGet, day, personId),
+    set: (day, body, personId) => ipcRenderer.invoke(CH.notesSet, day, body, personId)
+  },
 
   people: {
     list: () => ipcRenderer.invoke(CH.peopleList),
@@ -107,7 +113,10 @@ const api: DonelineAPI = {
     setSelf: (personId) => ipcRenderer.invoke(CH.selfSet, personId),
     list: () => ipcRenderer.invoke(CH.presenceList),
     update: (p) => ipcRenderer.invoke(CH.presenceUpdate, p),
-    nudge: (toPerson, message) => ipcRenderer.invoke(CH.nudgeSend, toPerson, message),
+    nudge: (toPerson, message, kind) => ipcRenderer.invoke(CH.nudgeSend, toPerson, message, kind),
+    unseenNudges: () => ipcRenderer.invoke(CH.nudgesUnseen),
+    markNudgeSeen: (id) => ipcRenderer.invoke(CH.nudgeSeen, id),
+    nudgeWasSeen: (id) => ipcRenderer.invoke(CH.nudgeWasSeen, id),
     invite: (toPerson, focusMin, breakMin) => ipcRenderer.invoke(CH.inviteSend, toPerson, focusMin, breakMin),
     pendingInvites: () => ipcRenderer.invoke(CH.invitesPending),
     markInviteSeen: (id) => ipcRenderer.invoke(CH.inviteSeen, id),

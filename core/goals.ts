@@ -3,21 +3,34 @@ import { getDb } from './db.js'
 import { primaryPersonId } from './people.js'
 import type { Goal } from './types.js'
 
+// Progress counts live in SQL so archived todos still count — otherwise a goal's
+// progress bar silently resets every time completed todos get swept to the archive.
+const SELECT_WITH_COUNTS = `
+  SELECT g.*,
+    (SELECT COUNT(*) FROM todos t
+      WHERE t.goal_id = g.id AND t.recurrence IS NULL) AS todo_total,
+    (SELECT COUNT(*) FROM todos t
+      WHERE t.goal_id = g.id AND t.recurrence IS NULL AND t.completed_at IS NOT NULL) AS todo_done
+  FROM goals g
+`
+
 export function listGoals(opts: { includeArchived?: boolean; personId?: string } = {}): Goal[] {
   const db = getDb()
   const where: string[] = []
   const args: string[] = []
-  if (!opts.includeArchived) where.push('archived = 0')
+  if (!opts.includeArchived) where.push('g.archived = 0')
   if (opts.personId && opts.personId !== 'all') {
-    where.push('person_id = ?')
+    where.push('g.person_id = ?')
     args.push(opts.personId)
   }
   const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
-  return db.prepare(`SELECT * FROM goals ${clause} ORDER BY created_at DESC`).all(...args) as Goal[]
+  return db
+    .prepare(`${SELECT_WITH_COUNTS} ${clause} ORDER BY g.created_at DESC`)
+    .all(...args) as Goal[]
 }
 
 export function getGoal(id: string): Goal | undefined {
-  return getDb().prepare('SELECT * FROM goals WHERE id = ?').get(id) as Goal | undefined
+  return getDb().prepare(`${SELECT_WITH_COUNTS} WHERE g.id = ?`).get(id) as Goal | undefined
 }
 
 export function createGoal(input: {

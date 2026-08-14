@@ -9,6 +9,7 @@ export * from './events.js'
 export * from './settings.js'
 export * from './caldav.js'
 export * from './reactions.js'
+export * from './notes.js'
 export {
   getSyncConfig,
   setSyncConfig,

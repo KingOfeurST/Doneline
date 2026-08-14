@@ -83,8 +83,17 @@ CREATE TABLE IF NOT EXISTS nudges (
   from_person TEXT NOT NULL,
   to_person   TEXT NOT NULL,
   message     TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'message',
   created_at  TEXT NOT NULL DEFAULT (datetime('now')),
   seen        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS daily_notes (
+  day        TEXT NOT NULL,
+  person_id  TEXT NOT NULL,
+  body       TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (day, person_id)
 );
 
 CREATE TABLE IF NOT EXISTS todo_completions (
@@ -123,19 +132,12 @@ CREATE TABLE IF NOT EXISTS reactions (
   UNIQUE(todo_id, person_id, emoji)
 );
 
-CREATE TABLE IF NOT EXISTS activity_log (
-  id         TEXT PRIMARY KEY,
-  person_id  TEXT NOT NULL,
-  action     TEXT NOT NULL,
-  payload    TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 CREATE INDEX IF NOT EXISTS idx_todos_due ON todos(due_at);
 CREATE INDEX IF NOT EXISTS idx_todos_completed ON todos(completed_at);
+CREATE INDEX IF NOT EXISTS idx_todos_goal ON todos(goal_id);
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(starts_at);
 CREATE INDEX IF NOT EXISTS idx_reactions_todo ON reactions(todo_id);
-CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_nudges_to ON nudges(to_person, seen);
 `
 
 /** Add a column if it isn't already present (idempotent migration helper). */
@@ -168,6 +170,9 @@ function migrate(db: DB): void {
 
   // v3: events shared with everyone (show for both people).
   ensureColumn(db, 'events', 'shared', 'INTEGER NOT NULL DEFAULT 0')
+
+  // v4: nudge kind — 'message' (text) or 'buzz' (window shake).
+  ensureColumn(db, 'nudges', 'kind', "TEXT NOT NULL DEFAULT 'message'")
 
   // Seed the two default people if the table is empty.
   const count = (db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n

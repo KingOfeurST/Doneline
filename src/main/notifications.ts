@@ -4,7 +4,6 @@ import {
   getSelfPersonId,
   primaryPersonId,
   unseenNudgesFor,
-  markNudgeSeen,
   pendingInvitesFor,
   newReactionsFor,
   listEvents,
@@ -21,6 +20,7 @@ const notifiedEvents = new Set<string>()
 const notifiedTodos = new Set<string>()
 const notifiedInvites = new Set<string>()
 const notifiedReactions = new Set<string>()
+const notifiedNudges = new Set<string>()
 let morningSentDay = ''
 let appStart = Date.now()
 
@@ -131,21 +131,40 @@ export function testNotification(): void {
   show('Doneline', 'Notifications are working 🎉')
 }
 
-/** Notify (once) for nudges a friend sent to this device's profile. */
-export function notifyIncomingNudges(getWin: () => BrowserWindow | null): void {
+/**
+ * Fire an OS notification for nudges addressed to this device.
+ *
+ * Deliberately does NOT mark them seen — the renderer's in-app toast owns that,
+ * so a nudge is never consumed by an OS notification the user didn't actually
+ * see (permissions off, Focus Assist, unsigned build). A local set stops the
+ * same nudge notifying twice while it waits to be displayed in-app.
+ *
+ * Returns true if any of the new nudges was a buzz, so the caller can shake.
+ */
+export function notifyIncomingNudges(getWin: () => BrowserWindow | null): boolean {
   try {
     const self = getSelfPersonId() ?? primaryPersonId()
     const nudges = unseenNudgesFor(self)
-    if (nudges.length === 0) return
+    if (nudges.length === 0) return false
     getWindow = getWin
     const people = new Map(listPeople().map((p) => [p.id, p]))
+    let buzzed = false
     for (const n of nudges) {
+      if (notifiedNudges.has(n.id)) continue
+      notifiedNudges.add(n.id)
       const from = people.get(n.from_person)
-      show(`${from?.emoji ?? '👋'} ${from?.name ?? 'A friend'} nudged you`, n.message)
-      markNudgeSeen(n.id)
+      const who = `${from?.emoji ?? '👋'} ${from?.name ?? 'A friend'}`
+      if (n.kind === 'buzz') {
+        buzzed = true
+        show(`${who} buzzed you ⚡`, 'Wake up!')
+      } else {
+        show(`${who} nudged you`, n.message)
+      }
     }
+    return buzzed
   } catch (err) {
     console.error('[doneline] nudge check failed:', err)
+    return false
   }
 }
 

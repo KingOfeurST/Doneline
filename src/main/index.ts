@@ -96,6 +96,45 @@ function createTray(): void {
   }
 }
 
+/**
+ * MSN-style buzz: shake the window with a decaying oscillation, flash the
+ * taskbar entry, and bring it to the front. Restores the original position when
+ * done, and refuses to overlap with a shake already in flight.
+ */
+let shaking = false
+function buzzWindow(): void {
+  const w = mainWindow
+  if (!w || w.isDestroyed() || shaking) return
+  shaking = true
+
+  if (w.isMinimized()) w.restore()
+  w.show()
+  w.flashFrame(true)
+
+  const [originX, originY] = w.getPosition()
+  const DURATION = 600
+  const STEP = 16
+  const AMPLITUDE = 14
+  const started = Date.now()
+
+  const timer = setInterval(() => {
+    const elapsed = Date.now() - started
+    if (elapsed >= DURATION || w.isDestroyed()) {
+      clearInterval(timer)
+      if (!w.isDestroyed()) {
+        w.setPosition(originX, originY)
+        w.flashFrame(false)
+      }
+      shaking = false
+      return
+    }
+    // Amplitude decays linearly to zero so the shake settles instead of cutting off.
+    const decay = 1 - elapsed / DURATION
+    const offset = Math.round(Math.sin(elapsed / 22) * AMPLITUDE * decay)
+    w.setPosition(originX + offset, originY)
+  }, STEP)
+}
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1180,
@@ -145,7 +184,7 @@ function startCloudSyncLoop(): void {
     try {
       const synced = await cloudSync()
       if (synced) {
-        notifyIncomingNudges(() => mainWindow)
+        if (notifyIncomingNudges(() => mainWindow)) buzzWindow()
         notifyIncomingInvites(() => mainWindow)
         notifyNewReactions(() => mainWindow)
         mainWindow?.webContents.send('workspace:changed')
@@ -218,6 +257,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(CH.appVersion, () => app.getVersion())
   ipcMain.handle(CH.appPlatform, () => process.platform)
+  ipcMain.handle(CH.windowBuzz, () => buzzWindow())
   ipcMain.handle(CH.updateCheck, async () => {
     if (!app.isPackaged) return { state: 'dev' as const }
     try {

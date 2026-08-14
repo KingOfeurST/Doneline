@@ -61,8 +61,22 @@ body {
   animation: riseIn 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* Sharp horizontal jitter for an incoming buzz, mirroring the window shake. */
+@keyframes buzzShake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-7px); }
+  30% { transform: translateX(6px); }
+  45% { transform: translateX(-4px); }
+  60% { transform: translateX(3px); }
+  80% { transform: translateX(-2px); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .rise {
+    animation: none;
+  }
+  /* Keep the amber highlight but drop the motion. */
+  .animate-\[buzzShake_0\.5s_ease-in-out\] {
     animation: none;
   }
 }

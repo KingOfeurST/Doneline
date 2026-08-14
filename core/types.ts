@@ -15,6 +15,9 @@ export interface Goal {
   archived: number
   shared: number
   created_at: string
+  /** Linked todos (archived included, recurrence templates excluded). */
+  todo_total: number
+  todo_done: number
 }
 
 /** Recurrence rule. `weekly` uses `days` (0=Sun … 6=Sat). */
@@ -82,13 +85,25 @@ export interface Presence {
   updated_at: string
 }
 
+export type NudgeKind = 'message' | 'buzz'
+
 export interface Nudge {
   id: string
   from_person: string
   to_person: string
   message: string
+  kind: NudgeKind
   created_at: string
   seen: number
+  from_name?: string
+  from_emoji?: string
+}
+
+export interface DailyNote {
+  day: string // YYYY-MM-DD
+  person_id: string
+  body: string
+  updated_at: string
 }
 
 export interface FocusSession {

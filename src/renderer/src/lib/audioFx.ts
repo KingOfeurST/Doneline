@@ -88,6 +88,29 @@ export function playClick(): void {
   osc.stop(t + 0.15)
 }
 
+/** Insistent two-tone buzz for an incoming MSN-style nudge. Deliberately louder
+ *  and rougher than the other effects — it's meant to grab attention. */
+export function playBuzz(): void {
+  if (muted) return
+  const c = ctx()
+  if (!c) return
+  const t = c.currentTime
+  // Three rapid sawtooth bursts alternating pitch.
+  for (let i = 0; i < 3; i++) {
+    const at = t + i * 0.14
+    tone(i % 2 === 0 ? 320 : 240, at, 0.1, 0.22, 'sawtooth')
+  }
+}
+
+/** Soft two-note alert for an incoming text nudge. */
+export function playNudge(): void {
+  if (muted) return
+  const c = ctx()
+  if (!c) return
+  tone(587.33, c.currentTime, 0.14, 0.18, 'triangle')
+  tone(880, c.currentTime + 0.13, 0.2, 0.18, 'triangle')
+}
+
 export interface RainHandle {
   setVolume: (v: number) => void
   stop: () => void

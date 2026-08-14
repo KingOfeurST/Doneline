@@ -13,6 +13,7 @@ import FocusInvitePrompt from './components/FocusInvitePrompt'
 import SelfSetupBanner from './components/SelfSetupBanner'
 import PresenceChip from './components/PresenceChip'
 import CommandPalette from './components/CommandPalette'
+import NudgeToast from './components/NudgeToast'
 import { ProfileProvider } from './profile'
 import { FocusProvider, useFocus } from './focus'
 
@@ -120,6 +121,7 @@ function AppInner() {
 
       <FocusOverlay />
       <FocusInvitePrompt />
+      <NudgeToast />
       <SelfSetupBanner />
 
       <CommandPalette

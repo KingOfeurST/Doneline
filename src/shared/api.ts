@@ -9,7 +9,10 @@ import type {
   Presence,
   FocusInvite,
   FocusStats,
-  Reaction
+  Reaction,
+  Nudge,
+  NudgeKind,
+  DailyNote
 } from '../../core/index.js'
 
 // Re-export the entity types so the renderer can import them from one place.
@@ -25,7 +28,10 @@ export type {
   Presence,
   FocusInvite,
   FocusStats,
-  Reaction
+  Reaction,
+  Nudge,
+  NudgeKind,
+  DailyNote
 } from '../../core/index.js'
 
 export interface SafeCalDavConfig {
@@ -55,6 +61,13 @@ export interface WorkspaceStatus {
 export interface DonelineAPI {
   today(): Promise<string>
   platform(): Promise<string>
+  /** Shake this window and flash the taskbar (MSN-style buzz). */
+  buzzWindow(): Promise<void>
+
+  notes: {
+    get(day: string, personId?: string): Promise<DailyNote>
+    set(day: string, body: string, personId?: string): Promise<DailyNote>
+  }
 
   people: {
     list(): Promise<Person[]>
@@ -147,7 +160,13 @@ export interface DonelineAPI {
       task_title?: string | null
       ends_at?: string | null
     }): Promise<boolean>
-    nudge(toPerson: string, message: string): Promise<boolean>
+    nudge(toPerson: string, message: string, kind?: NudgeKind): Promise<Nudge>
+    /** Unseen nudges addressed to this device (last 10 minutes only). */
+    unseenNudges(): Promise<Nudge[]>
+    /** Mark a nudge shown — this is what clears it, so only call after display. */
+    markNudgeSeen(id: string): Promise<boolean>
+    /** Delivery receipt: has the recipient's client displayed this nudge yet? */
+    nudgeWasSeen(id: string): Promise<boolean>
     invite(toPerson: string, focusMin: number, breakMin: number): Promise<boolean>
     pendingInvites(): Promise<FocusInvite[]>
     markInviteSeen(id: string): Promise<boolean>

@@ -46,6 +46,11 @@ import {
   setPresence,
   listPresence,
   sendNudge,
+  unseenNudgesFor,
+  markNudgeSeen,
+  nudgeWasSeen,
+  getDailyNote,
+  setDailyNote,
   sendFocusInvite,
   pendingInvitesFor,
   markInviteSeen,
@@ -252,11 +257,33 @@ export function registerIpc(onWorkspaceChange: () => void): void {
       return true
     }
   )
-  ipcMain.handle(CH.nudgeSend, async (_e, toPerson: string, message: string) => {
-    const self = getSelfPersonId() ?? primaryPersonId()
-    sendNudge(self, toPerson, message)
+  ipcMain.handle(
+    CH.nudgeSend,
+    async (_e, toPerson: string, message: string, kind: 'message' | 'buzz' = 'message') => {
+      const self = getSelfPersonId() ?? primaryPersonId()
+      const n = sendNudge(self, toPerson, message, kind)
+      await cloudSync().catch(() => {})
+      return n
+    }
+  )
+  ipcMain.handle(CH.nudgesUnseen, () =>
+    unseenNudgesFor(getSelfPersonId() ?? primaryPersonId())
+  )
+  ipcMain.handle(CH.nudgeSeen, async (_e, id: string) => {
+    markNudgeSeen(id)
     await cloudSync().catch(() => {})
     return true
+  })
+  ipcMain.handle(CH.nudgeWasSeen, (_e, id: string) => nudgeWasSeen(id))
+
+  // Daily note
+  ipcMain.handle(CH.notesGet, (_e, day: string, personId?: string) =>
+    getDailyNote(day, personId ?? (getSelfPersonId() ?? primaryPersonId()))
+  )
+  ipcMain.handle(CH.notesSet, async (_e, day: string, body: string, personId?: string) => {
+    const n = setDailyNote(day, body, personId ?? (getSelfPersonId() ?? primaryPersonId()))
+    await cloudSync().catch(() => {})
+    return n
   })
   ipcMain.handle(CH.inviteSend, async (_e, toPerson: string, focusMin: number, breakMin: number) => {
     const self = getSelfPersonId() ?? primaryPersonId()

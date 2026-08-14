@@ -8,6 +8,7 @@ import AddTodoModal from '../components/AddTodoModal'
 import AddEventModal from '../components/AddEventModal'
 import FocusStatsCard from '../components/FocusStatsCard'
 import QuickAdd from '../components/QuickAdd'
+import DailyNote from '../components/DailyNote'
 import { fmtDayLabel } from '../lib/format'
 import { playDing } from '../lib/audioFx'
 
@@ -151,6 +152,32 @@ export default function TodayView() {
             <p className="mt-2 font-bold text-slate-500">A fresh start</p>
             <p className="text-sm font-semibold text-slate-400">Add your first todo below.</p>
           </div>
+        ) : openCount === 0 ? (
+          <div className="py-8 text-center">
+            <p className="text-4xl">🎉</p>
+            <p className="mt-2 font-bold text-mint-ink">You’re clear for today</p>
+            <p className="text-sm font-semibold text-slate-400">
+              Everything on the list is done. Go enjoy it.
+            </p>
+            <details className="mt-5 text-left">
+              <summary className="cursor-pointer text-center text-xs font-bold uppercase tracking-wide text-slate-400">
+                Show what you finished
+              </summary>
+              <div className="mt-2">
+                {todos.map((t) => (
+                  <TodoRow
+                    key={t.id}
+                    todo={t}
+                    onToggle={toggle}
+                    onDelete={removeTodo}
+                    onReact={react}
+                    reactions={reactionsFor(t.id)}
+                    showOwner={combined}
+                  />
+                ))}
+              </div>
+            </details>
+          </div>
         ) : (
           <div>
             {todos.map((t) => (
@@ -178,6 +205,8 @@ export default function TodayView() {
           Add Todo
         </button>
       </section>
+
+      {today && <DailyNote day={today} />}
 
       <AddTodoModal
         open={showTodo}

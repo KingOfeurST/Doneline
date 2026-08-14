@@ -65,12 +65,19 @@ export const CH = {
   selfSet: 'presence:selfSet',
   selfRaw: 'presence:selfRaw',
   nudgeSend: 'presence:nudge',
+  nudgesUnseen: 'presence:nudgesUnseen',
+  nudgeSeen: 'presence:nudgeSeen',
+  nudgeWasSeen: 'presence:nudgeWasSeen',
+  windowBuzz: 'app:buzz',
   inviteSend: 'presence:invite',
   invitesPending: 'presence:invitesPending',
   inviteSeen: 'presence:inviteSeen',
   inviteAccept: 'presence:inviteAccept',
   inviteStart: 'presence:inviteStart',
   inviteActive: 'presence:inviteActive',
+
+  notesGet: 'notes:get',
+  notesSet: 'notes:set',
 
   today: 'app:today',
   appPlatform: 'app:platform'

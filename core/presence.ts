@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid'
 import { getDb } from './db.js'
-import type { Presence, Nudge, FocusInvite } from './types.js'
+import type { Presence, Nudge, NudgeKind, FocusInvite } from './types.js'
 
 export function setPresence(
   personId: string,
@@ -22,19 +22,42 @@ export function listPresence(): Presence[] {
   return getDb().prepare('SELECT * FROM presence').all() as Presence[]
 }
 
-export function sendNudge(fromPerson: string, toPerson: string, message: string): Nudge {
+export function sendNudge(
+  fromPerson: string,
+  toPerson: string,
+  message: string,
+  kind: NudgeKind = 'message'
+): Nudge {
   const db = getDb()
   const id = uuid()
   db.prepare(
-    'INSERT INTO nudges (id, from_person, to_person, message) VALUES (?, ?, ?, ?)'
-  ).run(id, fromPerson, toPerson, message.trim())
+    'INSERT INTO nudges (id, from_person, to_person, message, kind) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, fromPerson, toPerson, message.trim(), kind)
   return db.prepare('SELECT * FROM nudges WHERE id = ?').get(id) as Nudge
 }
 
+/** Unseen nudges for a person, with the sender's name/emoji joined in.
+ *  Anything older than 10 minutes is skipped so reopening the app after a long
+ *  break doesn't dump a backlog of stale buzzes. */
 export function unseenNudgesFor(personId: string): Nudge[] {
   return getDb()
-    .prepare('SELECT * FROM nudges WHERE to_person = ? AND seen = 0 ORDER BY created_at')
+    .prepare(
+      `SELECT n.*, p.name AS from_name, p.emoji AS from_emoji
+       FROM nudges n
+       LEFT JOIN people p ON p.id = n.from_person
+       WHERE n.to_person = ? AND n.seen = 0
+         AND n.created_at > datetime('now', '-10 minutes')
+       ORDER BY n.created_at`
+    )
     .all(personId) as Nudge[]
+}
+
+/** True once the recipient's client has marked the nudge seen (delivery receipt). */
+export function nudgeWasSeen(id: string): boolean {
+  const row = getDb().prepare('SELECT seen FROM nudges WHERE id = ?').get(id) as
+    | { seen: number }
+    | undefined
+  return row?.seen === 1
 }
 
 export function markNudgeSeen(id: string): void {
