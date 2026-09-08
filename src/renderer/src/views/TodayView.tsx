@@ -13,8 +13,10 @@ import { fmtDayLabel } from '../lib/format'
 import { playDing } from '../lib/audioFx'
 
 export default function TodayView() {
-  const { active, queryPersonId, defaultOwnerId, personById, tick } = useProfile()
+  const { active, people, self, queryPersonId, defaultOwnerId, personById, tick } = useProfile()
   const combined = active === 'all'
+  // Whose note to show when a single profile is selected: that profile.
+  const noteOwnerId = combined ? undefined : active || self
   const [today, setToday] = useState('')
   const [todos, setTodos] = useState<TodoWithGoal[]>([])
   const [events, setEvents] = useState<CalEvent[]>([])
@@ -210,8 +212,17 @@ export default function TodayView() {
       </section>
 
         {today && (
-          <div className="lg:sticky lg:top-6">
-            <DailyNote day={today} />
+          <div className="space-y-5 lg:sticky lg:top-6">
+            {/* Notes follow the profile switcher. In the combined view both are
+                shown, so a note written for the other person is visible here
+                and on their machine after the next sync. */}
+            {combined ? (
+              people.map((p) => (
+                <DailyNote key={p.id} day={today} personId={p.id} owner={p} />
+              ))
+            ) : (
+              noteOwnerId && <DailyNote day={today} personId={noteOwnerId} />
+            )}
           </div>
         )}
       </div>
