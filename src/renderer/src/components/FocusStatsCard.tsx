@@ -7,6 +7,7 @@ interface PersonStats {
   personId: string
   name: string
   emoji: string
+  color: string
   stats: FocusStats
 }
 
@@ -27,6 +28,7 @@ export default function FocusStatsCard() {
             personId: p.id,
             name: p.name,
             emoji: p.emoji,
+            color: p.color,
             stats: await api.focus.stats(p.id)
           }))
         )
@@ -96,9 +98,11 @@ export default function FocusStatsCard() {
                       <span className="text-slate-400">{ps.stats.weekSessions} sessions</span>
                     </div>
                     <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                      {/* Each person gets their own colour. A grey bar on the grey
+                          track was near-invisible, which defeated the comparison. */}
                       <div
-                        className={`h-full rounded-full transition-all ${isMe ? 'bg-mint-ink' : 'bg-slate-300'}`}
-                        style={{ width: `${barPct}%` }}
+                        className="h-full rounded-full transition-all"
+                        style={{ width: `${barPct}%`, background: ps.color }}
                       />
                     </div>
                   </div>

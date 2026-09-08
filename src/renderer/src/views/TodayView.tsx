@@ -218,7 +218,7 @@ export default function TodayView() {
                 and on their machine after the next sync. */}
             {combined ? (
               people.map((p) => (
-                <DailyNote key={p.id} day={today} personId={p.id} owner={p} />
+                <DailyNote key={p.id} day={today} personId={p.id} owner={p} compact={people.length > 1} />
               ))
             ) : (
               noteOwnerId && <DailyNote day={today} personId={noteOwnerId} />

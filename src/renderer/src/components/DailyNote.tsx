@@ -12,6 +12,8 @@ interface Props {
   personId: string
   /** Shown in the header when more than one note is on screen. */
   owner?: Person
+  /** Shorter writing area, for when several notes stack in one column. */
+  compact?: boolean
 }
 
 /**
@@ -19,7 +21,7 @@ interface Props {
  * a debounce so it never fights the typing cursor, and refreshes when a
  * background sync brings in the other person's edits.
  */
-export default function DailyNote({ day, personId, owner }: Props) {
+export default function DailyNote({ day, personId, owner, compact = false }: Props) {
   const { tick } = useProfile()
   const [body, setBody] = useState('')
   const [saved, setSaved] = useState(false)
@@ -134,7 +136,7 @@ export default function DailyNote({ day, personId, owner }: Props) {
         onChange={(e) => edit(e.target.value)}
         placeholder={'Brain dump, plans, how today went…'}
         spellCheck={false}
-        className="min-h-[320px] flex-1 resize-none bg-transparent px-5 py-4 text-[15px] font-medium leading-7 text-amber-950 outline-none placeholder:font-semibold placeholder:text-amber-700/35"
+        className={`${compact ? 'min-h-[168px]' : 'min-h-[320px]'} flex-1 resize-none bg-transparent px-5 py-4 text-[15px] font-medium leading-7 text-amber-950 outline-none placeholder:font-semibold placeholder:text-amber-700/35`}
         style={{
           backgroundImage:
             'repeating-linear-gradient(180deg, transparent 0px, transparent 27px, rgba(180,140,60,0.13) 28px)',
