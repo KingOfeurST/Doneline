@@ -170,11 +170,23 @@ export function setTodoDone(id: string, done?: boolean, selfPersonId?: string): 
   return getTodo(id)
 }
 
+/**
+ * Delete a todo. For a recurrence template this also stops its future instances,
+ * but completed ones are kept and simply detached: wiping them would erase the
+ * archive and silently roll back the progress bar on any goal they counted for.
+ */
 export function deleteTodo(id: string): void {
   const db = getDb()
-  // Clean up completions for the template and all its instances before deleting todos.
-  db.prepare('DELETE FROM todo_completions WHERE todo_id = ? OR todo_id IN (SELECT id FROM todos WHERE recur_parent = ?)').run(id, id)
-  db.prepare('DELETE FROM todos WHERE id = ? OR recur_parent = ?').run(id, id)
+  // Completions belonging to the row itself and to instances about to go.
+  db.prepare(
+    `DELETE FROM todo_completions
+     WHERE todo_id = ?
+        OR todo_id IN (SELECT id FROM todos WHERE recur_parent = ? AND completed_at IS NULL)`
+  ).run(id, id)
+  // Keep finished instances as history, orphaned from the deleted rule.
+  db.prepare('UPDATE todos SET recur_parent = NULL WHERE recur_parent = ? AND completed_at IS NOT NULL').run(id)
+  db.prepare('DELETE FROM todos WHERE recur_parent = ? AND completed_at IS NULL').run(id)
+  db.prepare('DELETE FROM todos WHERE id = ?').run(id)
 }
 
 /** Archive todos completed before `dayISO` (kept in DB, hidden from lists).

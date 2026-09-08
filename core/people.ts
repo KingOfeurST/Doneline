@@ -51,8 +51,34 @@ export function deletePerson(id: string): void {
   const db = getDb()
   const count = (db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n
   if (count <= 1) throw new Error('Cannot delete the last profile.')
+  // Completions this person recorded, including ones on todos owned by someone
+  // else, plus completions on the todos about to be removed.
+  db.prepare('DELETE FROM todo_completions WHERE person_id = ?').run(id)
+  db.prepare(
+    'DELETE FROM todo_completions WHERE todo_id IN (SELECT id FROM todos WHERE person_id = ?)'
+  ).run(id)
+  db.prepare('DELETE FROM reactions WHERE person_id = ?').run(id)
+  db.prepare(
+    'DELETE FROM reactions WHERE todo_id IN (SELECT id FROM todos WHERE person_id = ?)'
+  ).run(id)
+
   db.prepare('DELETE FROM todos WHERE person_id = ?').run(id)
   db.prepare('DELETE FROM goals WHERE person_id = ?').run(id)
   db.prepare('DELETE FROM events WHERE person_id = ?').run(id)
+
+  // Anything else keyed to this person: leaving these behind kept a deleted
+  // profile alive in presence, focus stats and the nudge/invite queues.
+  db.prepare('DELETE FROM presence WHERE person_id = ?').run(id)
+  db.prepare('DELETE FROM daily_notes WHERE person_id = ?').run(id)
+  db.prepare('DELETE FROM focus_sessions WHERE person_id = ?').run(id)
+  db.prepare('DELETE FROM nudges WHERE from_person = ? OR to_person = ?').run(id, id)
+  db.prepare('DELETE FROM focus_invites WHERE from_person = ? OR to_person = ?').run(id, id)
+
   db.prepare('DELETE FROM people WHERE id = ?').run(id)
+
+  // A template owned by someone else could still point at a goal that just went
+  // away; clear those so they stop generating todos under a dead goal.
+  db.prepare(
+    "UPDATE todos SET goal_id = NULL WHERE goal_id IS NOT NULL AND goal_id NOT IN (SELECT id FROM goals)"
+  ).run()
 }

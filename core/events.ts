@@ -46,14 +46,16 @@ export function listDayEvents(dayISO: string, personId?: string): CalEvent[] {
     .prepare(
       `SELECT * FROM events
        WHERE ${NOT_TEMPLATE} AND (
-         (all_day = 1 AND date(starts_at, 'localtime') = date(?))
+         (all_day = 1
+             AND date(starts_at, 'localtime') <= date(?)
+             AND date(ends_at, 'localtime') >= date(?))
          OR (all_day = 0
              AND datetime(starts_at, 'localtime') <= ?
              AND datetime(ends_at, 'localtime') >= ?)
        )${extra}
        ORDER BY all_day DESC, starts_at`
     )
-    .all(dayISO, end, start, ...p.args) as CalEvent[]
+    .all(dayISO, dayISO, end, start, ...p.args) as CalEvent[]
 }
 
 export function getEvent(id: string): CalEvent | undefined {

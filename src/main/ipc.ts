@@ -29,6 +29,7 @@ import {
   syncCalendar,
   pushEvent,
   deleteRemoteEvent,
+  updateRemoteEvent,
   localDay,
   getSyncConfig,
   setSyncConfig,
@@ -170,9 +171,16 @@ export function registerIpc(onWorkspaceChange: () => void): void {
     }
     return ev
   })
-  ipcMain.handle(CH.eventUpdate, (_e, id, patch) => {
+  ipcMain.handle(CH.eventUpdate, async (_e, id, patch) => {
     const r = updateEvent(id, patch)
     push()
+    // Mirror the edit to the calendar. Without this the remote copy keeps the
+    // old data forever, so the change never reaches the phone.
+    try {
+      await updateRemoteEvent(id)
+    } catch (err) {
+      console.error('[doneline] remote event update failed:', err)
+    }
     return r
   })
   ipcMain.handle(CH.eventDelete, async (_e, id) => {

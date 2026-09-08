@@ -180,6 +180,42 @@ export async function deleteRemoteEvent(eventId: string): Promise<void> {
   })
 }
 
+/**
+ * Push a local edit of an already-synced event up to the calendar.
+ *
+ * Without this, editing a synced event only changed the local row: the remote
+ * copy kept the old data forever, so the change never reached the phone, and a
+ * later remote change would overwrite the local edit on the next pull.
+ *
+ * Best effort: a failure here must not block the local edit.
+ */
+export async function updateRemoteEvent(eventId: string): Promise<void> {
+  const ev = getEvent(eventId)
+  if (!ev || !ev.caldav_uid) return // local-only event, nothing to update
+  const cfg = getCalDavConfig(ev.person_id)
+  if (!cfg) return
+
+  const client = await connect(cfg)
+  const calendar = await pickCalendar(client, cfg)
+  const ics = buildICS({
+    uid: ev.caldav_uid,
+    summary: ev.title,
+    location: ev.location,
+    description: ev.notes,
+    start: ev.starts_at,
+    end: ev.ends_at,
+    allDay: ev.all_day === 1
+  })
+  const url = ev.caldav_url || (calendar.url ?? '') + `${ev.caldav_uid}.ics`
+  const res = await client.updateCalendarObject({
+    calendarObject: { url, data: ics, etag: ev.caldav_etag ?? undefined }
+  })
+  // Store the new etag so the next pull doesn't treat our own write as a
+  // remote change and clobber the event with stale data.
+  const etag = typeof res?.headers?.get === 'function' ? res.headers.get('etag') : null
+  updateEvent(ev.id, { caldav_url: url, caldav_etag: etag })
+}
+
 /** Push a single local event immediately (used when adding from the app). */
 export async function pushEvent(eventId: string): Promise<void> {
   const ev = getEvent(eventId)
