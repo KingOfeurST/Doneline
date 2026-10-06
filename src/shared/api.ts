@@ -91,6 +91,8 @@ export interface DonelineAPI {
     remove(id: string): Promise<void>
     reorder(updates: { id: string; position: number }[]): Promise<void>
     templates(): Promise<TodoWithGoal[]>
+    /** Everything under one goal, archived included. */
+    forGoal(goalId: string): Promise<{ open: TodoWithGoal[]; done: TodoWithGoal[]; templates: TodoWithGoal[] }>
     removeTemplate(id: string): Promise<void>
   }
 

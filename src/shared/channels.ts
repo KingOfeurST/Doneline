@@ -55,6 +55,7 @@ export const CH = {
 
   todoReorder: 'todos:reorder',
   todoTemplatesList: 'todos:templates',
+  todosForGoal: 'todos:forGoal',
   todoTemplateDelete: 'todos:templateDelete',
   reactionsToggle: 'reactions:toggle',
   reactionsList: 'reactions:list',

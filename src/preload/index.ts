@@ -35,6 +35,7 @@ const api: DonelineAPI = {
     remove: (id) => ipcRenderer.invoke(CH.todoDelete, id),
     reorder: (updates) => ipcRenderer.invoke(CH.todoReorder, updates),
     templates: () => ipcRenderer.invoke(CH.todoTemplatesList),
+    forGoal: (goalId) => ipcRenderer.invoke(CH.todosForGoal, goalId),
     removeTemplate: (id) => ipcRenderer.invoke(CH.todoTemplateDelete, id)
   },
 

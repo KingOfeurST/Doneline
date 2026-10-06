@@ -64,6 +64,34 @@ export function listArchivedTodos(personId?: string): TodoWithGoal[] {
     .all(...p.args) as TodoWithGoal[]
 }
 
+/**
+ * Everything linked to one goal, archived included, newest activity first.
+ *
+ * The normal listings hide archived rows, so a goal's finished work became
+ * invisible once the nightly sweep ran. The detail view needs the full history,
+ * so this deliberately ignores the archived filter. Recurrence templates are
+ * returned separately since they are rules, not tasks.
+ */
+export function listTodosForGoal(goalId: string): {
+  open: TodoWithGoal[]
+  done: TodoWithGoal[]
+  templates: TodoWithGoal[]
+} {
+  const rows = getDb()
+    .prepare(
+      `${SELECT_WITH_GOAL} WHERE t.goal_id = ?
+       ORDER BY t.completed_at IS NOT NULL, t.position, t.created_at`
+    )
+    .all(goalId) as TodoWithGoal[]
+  return {
+    open: rows.filter((t) => t.recurrence === null && t.completed_at === null),
+    done: rows
+      .filter((t) => t.recurrence === null && t.completed_at !== null)
+      .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? '')),
+    templates: rows.filter((t) => t.recurrence !== null)
+  }
+}
+
 /** Recurrence templates (the repeat rules), with owner and goal joined in so the
  *  settings list can show whose rule it is. */
 export function listTodoTemplates(): TodoWithGoal[] {

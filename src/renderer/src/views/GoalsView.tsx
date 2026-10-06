@@ -5,6 +5,7 @@ import { useProfile } from '../profile'
 import Modal from '../components/Modal'
 import TodoRow from '../components/TodoRow'
 import AddTodoModal from '../components/AddTodoModal'
+import GoalDetail from './GoalDetail'
 import { PALETTE } from '../lib/colors'
 
 export default function GoalsView() {
@@ -17,6 +18,7 @@ export default function GoalsView() {
   const [color, setColor] = useState(PALETTE[0].value)
   const [shared, setShared] = useState(false)
   const [addTodoGoal, setAddTodoGoal] = useState<{ id: string; ownerId: string } | null>(null)
+  const [openGoalId, setOpenGoalId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setGoals(await api.goals.list({ personId: queryPersonId }))
@@ -50,6 +52,11 @@ export default function GoalsView() {
     load()
   }
 
+  const openGoal = goals.find((g) => g.id === openGoalId)
+  if (openGoal) {
+    return <GoalDetail goal={openGoal} onBack={() => setOpenGoalId(null)} onChanged={load} />
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -69,6 +76,7 @@ export default function GoalsView() {
         {goals.map((g, i) => {
           // Todos still visible today (archived ones have been swept out of this list).
           const linked = todos.filter((t) => t.goal_id === g.id)
+          const openTodos = linked.filter((t) => !t.completed_at)
           // Counts come from the DB and include archived todos, so progress
           // doesn't reset when completed items get swept to the archive.
           const total = g.todo_total
@@ -78,25 +86,30 @@ export default function GoalsView() {
           return (
             <section key={g.id} className="card rise lift p-6" style={{ animationDelay: `${i * 60}ms` }}>
               <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setOpenGoalId(g.id)}
+                  className="group flex min-w-0 items-center gap-3 text-left"
+                  title="Open this goal"
+                >
                   {combined && owner ? (
                     <span
-                      className="flex h-8 w-8 items-center justify-center rounded-full text-base"
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-base"
                       style={{ background: owner.color + '22' }}
-                      title={owner.name}
                     >
                       {owner.emoji}
                     </span>
                   ) : (
-                    <span className="h-4 w-4 rounded-full" style={{ background: g.color }} />
+                    <span className="h-4 w-4 shrink-0 rounded-full" style={{ background: g.color }} />
                   )}
-                  <h2 className="text-xl font-extrabold text-ink">{g.title}</h2>
+                  <h2 className="truncate text-xl font-extrabold text-ink underline-offset-4 group-hover:underline">
+                    {g.title}
+                  </h2>
                   {g.shared === 1 && (
-                    <span className="rounded-full bg-mint-card px-2 py-0.5 text-xs font-bold text-mint-ink">
+                    <span className="shrink-0 rounded-full bg-mint-card px-2 py-0.5 text-xs font-bold text-mint-ink">
                       👥 Shared
                     </span>
                   )}
-                </div>
+                </button>
                 <button
                   onClick={() => removeGoal(g.id)}
                   className="rounded-full p-1.5 text-slate-300 transition hover:bg-rose-50 hover:text-rose-ink"
@@ -124,26 +137,50 @@ export default function GoalsView() {
                 </div>
               </div>
 
+              {/* A preview, not the whole list: the goal's own page holds the
+                  full history, so the card stays scannable. */}
               <div className="mt-3">
-                {linked.length === 0 ? (
+                {openTodos.length === 0 ? (
                   <p className="py-4 text-sm font-semibold text-slate-400">
-                    {total > 0
-                      ? `All ${total} todo${total === 1 ? '' : 's'} finished and archived.`
-                      : 'No todos linked yet.'}
+                    {total === 0
+                      ? 'No todos linked yet.'
+                      : done === total
+                        ? `All ${total} done.`
+                        : 'Nothing open right now.'}
                   </p>
                 ) : (
-                  linked.map((t) => (
-                    <TodoRow key={t.id} todo={t} onToggle={toggle} onDelete={removeTodo} showOwner={combined} />
-                  ))
+                  openTodos
+                    .slice(0, 3)
+                    .map((t) => (
+                      <TodoRow
+                        key={t.id}
+                        todo={t}
+                        onToggle={toggle}
+                        onDelete={removeTodo}
+                        showOwner={combined}
+                        hideGoal
+                      />
+                    ))
                 )}
               </div>
 
-              <button
-                className="mt-2 w-full rounded-2xl bg-slate-100/80 py-2.5 text-sm font-bold text-ink transition hover:bg-slate-200/80"
-                onClick={() => setAddTodoGoal({ id: g.id, ownerId: g.person_id })}
-              >
-                + Add todo to this goal
-              </button>
+              <div className="mt-3 flex gap-2">
+                <button
+                  className="flex-1 rounded-2xl bg-slate-100/80 py-2.5 text-sm font-bold text-ink transition hover:bg-slate-200/80"
+                  onClick={() => setAddTodoGoal({ id: g.id, ownerId: g.person_id })}
+                >
+                  + Add todo
+                </button>
+                <button
+                  className="flex-1 rounded-2xl py-2.5 text-sm font-bold text-white transition hover:brightness-110"
+                  style={{ background: g.color }}
+                  onClick={() => setOpenGoalId(g.id)}
+                >
+                  {openTodos.length > 3
+                    ? `Open goal (${openTodos.length - 3} more)`
+                    : 'Open goal'}
+                </button>
+              </div>
             </section>
           )
         })}

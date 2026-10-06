@@ -68,6 +68,7 @@ import {
   listReactionsForTodo,
   reorderTodos,
   listTodoTemplates,
+  listTodosForGoal,
   type CalDavConfig,
   type SyncConfig,
   type NotifPrefs
@@ -150,6 +151,7 @@ export function registerIpc(onWorkspaceChange: () => void): void {
     push()
   })
   ipcMain.handle(CH.todoTemplatesList, () => listTodoTemplates())
+  ipcMain.handle(CH.todosForGoal, (_e, goalId: string) => listTodosForGoal(goalId))
   ipcMain.handle(CH.todoTemplateDelete, (_e, id: string) => {
     deleteTodo(id)
     push()

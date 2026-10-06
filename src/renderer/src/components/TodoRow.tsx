@@ -9,6 +9,8 @@ interface Props {
   onReact?: (todoId: string, emoji: string) => void
   reactions?: Reaction[]
   showOwner?: boolean
+  /** Hide the goal chip where the goal is already the context, e.g. its own page. */
+  hideGoal?: boolean
   dragging?: boolean
   onDragStart?: () => void
   onDragEnter?: () => void
@@ -24,6 +26,7 @@ export default function TodoRow({
   onReact,
   reactions = [],
   showOwner,
+  hideGoal,
   dragging,
   onDragStart,
   onDragEnter,
@@ -132,7 +135,7 @@ export default function TodoRow({
         </span>
       )}
 
-      {!mutual && todo.goal_title && (
+      {!mutual && !hideGoal && todo.goal_title && (
         <span
           className="hidden shrink-0 rounded-full px-3 py-1 text-xs font-bold sm:inline"
           style={{ background: (todo.goal_color || '#2f7a4d') + '22', color: todo.goal_color || '#2f7a4d' }}
