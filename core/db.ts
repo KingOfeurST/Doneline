@@ -3,6 +3,7 @@ import path from 'node:path'
 import Database from 'libsql'
 import { v4 as uuid, v5 as stableUuid } from 'uuid'
 import { createHash } from 'node:crypto'
+import { pathToFileURL } from 'node:url'
 import { dataDir, dbPath } from './paths.js'
 import { getSyncConfig, type SyncConfig } from './config.js'
 import { installSyncJournal, pendingSyncChanges, remoteTransaction, syncOfflineWorkspace } from './offlineSync.js'
@@ -304,7 +305,12 @@ function openConnection(): DB {
   // consistent SQLite snapshot, including committed WAL data, into our new file.
   if (cfg && !fs.existsSync(target) && fs.existsSync(replicaPath()) && !fs.readdirSync(dataDir()).some((name) => /^doneline-workspace-.*\.db$/.test(name))) {
     const importing = `${target}.importing-${uuid()}`
-    const cached = new Database(replicaPath())
+    // libsql's JS constructor ignores its declared `readonly` option. SQLite's
+    // URI mode is enforced by the native driver and prevents close-time WAL
+    // checkpointing from modifying the legacy source on macOS.
+    const source = pathToFileURL(replicaPath())
+    source.searchParams.set('mode', 'ro')
+    const cached = new Database(source.href)
     try {
       cached.prepare('VACUUM INTO ?').run(importing)
       // Publish a fully committed snapshot atomically without replacing a file

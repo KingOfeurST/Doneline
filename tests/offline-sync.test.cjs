@@ -278,7 +278,9 @@ const core=require('./core.cjs');
 })
 
 test('legacy replica imports committed WAL notes atomically and preserves its source; a different workspace never imports it again', async () => {
-  const directory=path.join(temporary,'legacy')
+  // The read-only file URI must encode filesystem names rather than treating
+  // spaces or a literal # as URL syntax.
+  const directory=path.join(temporary,'legacy # with spaces')
   fs.mkdirSync(directory,{recursive:true})
   const sourceFile=path.join(directory,'doneline-replica.db')
   const source=new Database(sourceFile)

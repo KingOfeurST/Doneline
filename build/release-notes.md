@@ -1,4 +1,4 @@
-# Doneline 0.4.0
+# Doneline 0.4.1
 
 Keeps Doneline's existing interface and adds the approved planning and data recovery features.
 

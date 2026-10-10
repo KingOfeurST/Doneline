@@ -4,6 +4,9 @@ const { spawnSync } = require('node:child_process')
 const { buildSync } = require('esbuild')
 
 const root = path.resolve(__dirname, '..')
+// Electron can install its binary lazily on first require. Finish that once in
+// this parent before parallel workers launch apps from the same extracted dist.
+require('electron')
 const output = path.join(root, 'out', 'tests', 'ui-state.test.cjs')
 buildSync({ entryPoints: [path.join(__dirname, 'ui-state.test.ts')], bundle: true, platform: 'node', format: 'cjs', outfile: output })
 const tests = fs.readdirSync(__dirname).filter((name) => name.endsWith('.test.cjs') && !['renderer.test.cjs', 'ipc.test.cjs'].includes(name))
