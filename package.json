@@ -16,7 +16,8 @@
     "publish:mac": "electron-vite build && electron-builder --mac --publish always",
     "build:mcp": "esbuild mcp/server.ts --bundle --platform=node --format=cjs --packages=external --outfile=out/mcp/server.cjs",
     "mcp": "npm run build:mcp && node out/mcp/server.cjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:mcp": "npm run build:mcp && node mcp/smoke-test.cjs"
   },
   "dependencies": {
     "chrono-node": "^2.9.1",
@@ -80,7 +81,10 @@
       "icon": "build/icon.ico"
     },
     "mac": {
-      "target": ["dmg", "zip"],
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.productivity",
       "icon": "build/icon.icns"
     }
