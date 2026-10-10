@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
 import { playClick } from './lib/audioFx'
+import { flushPendingNotes } from './lib/notePersistence'
 import TodayView from './views/TodayView'
 import CalendarView from './views/CalendarView'
 import GoalsView from './views/GoalsView'
@@ -136,6 +137,7 @@ function AppInner() {
 
 export default function App() {
   const [started, setStarted] = useState(false)
+  useEffect(() => api.lifecycle.onPrepareQuit(flushPendingNotes), [])
   if (!started) return <StartScreen onDone={() => setStarted(true)} />
   return (
     <ProfileProvider>

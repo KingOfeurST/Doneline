@@ -72,6 +72,11 @@ export interface DonelineAPI {
   today(): Promise<string>
   platform(): Promise<string>
 
+  lifecycle: {
+    /** Save pending local edits before a real quit or update. Failures cancel quitting. */
+    onPrepareQuit(cb: () => Promise<void>): () => void
+  }
+
   notes: {
     get(day: string, personId?: string): Promise<DailyNote>
     set(day: string, body: string, personId?: string): Promise<DailyNote>

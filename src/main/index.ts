@@ -1,8 +1,9 @@
-import { app, BrowserWindow, Menu, Tray, nativeImage, shell, ipcMain } from 'electron'
+import { app, BrowserWindow, Menu, Tray, nativeImage, shell, ipcMain, dialog, session } from 'electron'
 import { join, resolve } from 'node:path'
 import electronUpdater from 'electron-updater'
 import { CH, EVT } from '../shared/channels.js'
 import { UpdateController, detectMacAutoInstall } from './updates.js'
+import { QuitCoordinator } from './quit.js'
 
 const { autoUpdater } = electronUpdater
 
@@ -12,6 +13,11 @@ if (process.env.DONELINE_USER_DATA_DIR) {
   app.setPath('userData', userData)
   app.setPath('sessionData', userData)
 }
+
+// A second editor for the same profile can overwrite a newer note with stale text.
+// Electron scopes this lock to userData, so isolated fixture profiles remain independent.
+const primaryInstance = app.requestSingleInstanceLock()
+if (!primaryInstance) app.quit()
 
 // The app and the MCP server share one DB. Both default to ~/.doneline (see
 // core/paths.ts). Override with the DONELINE_DIR env var if you want it elsewhere
@@ -38,6 +44,37 @@ let isQuitting = false
 let syncTimer: NodeJS.Timeout | null = null
 let maintenanceTimer: NodeJS.Timeout | null = null
 let updates: UpdateController | null = null
+const quitCoordinator = new QuitCoordinator()
+let quitInFlight = false
+let allowQuit = false
+
+ipcMain.on(CH.quitReady, (event, payload: unknown) => {
+  if (event.senderFrame !== event.sender.mainFrame) return
+  quitCoordinator.acknowledge(event.sender.id, payload)
+})
+
+async function prepareForQuit(): Promise<void> {
+  try { await quitCoordinator.prepare(BrowserWindow.getAllWindows()) }
+  finally { if (app.isReady()) session.defaultSession.flushStorageData() }
+}
+
+function reportQuitFailure(error: unknown): void {
+  isQuitting = false
+  allowQuit = false
+  console.error('[doneline] quit cancelled:', error)
+  if (mainWindow && !mainWindow.isDestroyed()) showWindow()
+  const options = {
+    type: 'error' as const,
+    title: 'Your note is still saving',
+    message: 'Doneline stayed open because your latest note could not be saved.',
+    detail: `${error instanceof Error ? error.message : 'Please try again.'}\n\nKeep or copy your note, then try quitting again.`,
+    buttons: ['Keep Doneline open']
+  }
+  const notice = mainWindow && !mainWindow.isDestroyed()
+    ? dialog.showMessageBox(mainWindow, options)
+    : dialog.showMessageBox(options)
+  void notice.catch(() => {})
+}
 
 function showWindow(): void {
   if (!mainWindow) {
@@ -80,10 +117,7 @@ function createTray(): void {
         { type: 'separator' },
         {
           label: 'Quit',
-          click: () => {
-            isQuitting = true
-            app.quit()
-          }
+          click: () => app.quit()
         }
       ])
     )
@@ -154,12 +188,25 @@ function createWindow(): void {
   // Closing the window hides it to the tray (so the focus timer keeps running);
   // real quit comes from the tray's Quit item. Only do this when a tray exists,
   // otherwise the window would vanish with no way to reopen it.
+  const window = mainWindow
+  let closeInFlight = false
+  let allowClose = false
   mainWindow.on('close', (e) => {
     if (!isQuitting && tray) {
       e.preventDefault()
-      mainWindow?.hide()
+      window.hide()
+      return
     }
+    if (isQuitting || allowClose) return
+    e.preventDefault()
+    if (closeInFlight) return
+    closeInFlight = true
+    void prepareForQuit().then(() => {
+      allowClose = true
+      if (!window.isDestroyed()) window.close()
+    }).catch(reportQuitFailure).finally(() => { closeInFlight = false })
   })
+  mainWindow.on('closed', () => { if (mainWindow === window) mainWindow = null })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     try {
@@ -204,6 +251,7 @@ function startCloudSyncLoop(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!primaryInstance) return
   Menu.setApplicationMenu(null) // hide the default File/Edit/View/Window/Help bar
   await initDb() // open + (cloud) pull + migrate
   try {
@@ -286,7 +334,8 @@ app.whenReady().then(async () => {
     emit: (status) => {
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(EVT.updateStatus, status)
     },
-    setQuitting: (quitting) => { isQuitting = quitting }
+    prepareForInstall: prepareForQuit,
+    setQuitting: (quitting) => { isQuitting = quitting; allowQuit = quitting }
   })
 
   ipcMain.handle(CH.appVersion, () => app.getVersion())
@@ -301,13 +350,35 @@ app.whenReady().then(async () => {
   })
 })
 
+app.on('second-instance', () => {
+  // Startup already shows the first window after the DB and IPC are ready.
+  if (!isQuitting && mainWindow && !mainWindow.isDestroyed()) showWindow()
+})
+
 // With a tray, closing the window is prevented (hidden) so this won't fire until
 // a real quit. Without a tray, fall back to normal quit-on-close (non-mac).
 app.on('window-all-closed', () => {
   if (isQuitting || process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (!primaryInstance) return
+  if (allowQuit) {
+    isQuitting = true
+    return
+  }
+  event.preventDefault()
+  if (quitInFlight) return
+  quitInFlight = true
+  void prepareForQuit().then(() => {
+    allowQuit = true
+    isQuitting = true
+    app.quit()
+  }).catch(reportQuitFailure).finally(() => { quitInFlight = false })
+})
+
+// The renderer and its acknowledged local writes are finished at this point.
+app.on('will-quit', () => {
   isQuitting = true
   if (syncTimer) clearInterval(syncTimer)
   if (maintenanceTimer) clearInterval(maintenanceTimer)

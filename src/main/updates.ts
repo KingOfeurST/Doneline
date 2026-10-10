@@ -45,6 +45,7 @@ interface UpdateDependencies {
   openExternal: (url: string) => Promise<unknown>
   emit: (status: UpdateStatus) => void
   setQuitting?: (quitting: boolean) => void
+  prepareForInstall?: () => Promise<void>
   schedule?: (callback: () => void, milliseconds: number) => () => void
 }
 
@@ -146,9 +147,18 @@ export class UpdateController {
     if (this.installRequested) return
     if (!this.readyToInstall || this.current.state !== 'downloaded') throw new Error('Download an update before installing it.')
     this.installRequested = true
-    this.publish('installing', { version: this.current.version })
-    this.dependencies.setQuitting?.(true)
-    try { this.dependencies.updater.quitAndInstall() }
+    try {
+      // quitAndInstall closes windows before Electron emits before-quit.
+      // Flush editors while their renderer and database are still available.
+      await this.dependencies.prepareForInstall?.()
+      if (this.disposed) return
+      if (!this.installRequested || !this.readyToInstall || this.current.state !== 'downloaded') {
+        throw new Error(this.current.message || 'The update is no longer ready to install.')
+      }
+      this.publish('installing', { version: this.current.version })
+      this.dependencies.setQuitting?.(true)
+      this.dependencies.updater.quitAndInstall()
+    }
     catch (error) { this.fail(error); throw error }
   }
 

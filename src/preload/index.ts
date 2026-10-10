@@ -2,9 +2,27 @@ import { contextBridge, ipcRenderer } from 'electron'
 import { CH, EVT } from '../shared/channels.js'
 import type { DonelineAPI, UpdateStatus } from '../shared/api.js'
 
+let prepareQuit: (() => Promise<void>) | null = null
+ipcRenderer.on(EVT.prepareQuit, async (_event, requestId: unknown) => {
+  if (typeof requestId !== 'string') return
+  try {
+    await prepareQuit?.()
+    ipcRenderer.send(CH.quitReady, { requestId })
+  } catch (error) {
+    ipcRenderer.send(CH.quitReady, { requestId, error: error instanceof Error ? error.message : 'A note could not be saved.' })
+  }
+})
+
 const api: DonelineAPI = {
   today: () => ipcRenderer.invoke(CH.today),
   platform: () => ipcRenderer.invoke(CH.appPlatform),
+
+  lifecycle: {
+    onPrepareQuit: (cb) => {
+      prepareQuit = cb
+      return () => { if (prepareQuit === cb) prepareQuit = null }
+    }
+  },
 
   notes: {
     get: (day, personId) => ipcRenderer.invoke(CH.notesGet, day, personId),

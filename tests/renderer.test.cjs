@@ -39,7 +39,7 @@ if (!process.versions.electron) {
       events:[event('alpha','Overlap alpha',at(today,9),at(today,11)),event('beta','Overlap beta',at(today,10),at(today,12)),event('overnight','Overnight fixture',at(dayKey(previous),23),at(today,2)),event('late','Late fixture',at(today,23,30),at(dayKey(tomorrow),0,30)),event('all-day','All-day fixture',at(today,0),at(dayKey(tomorrow),0),1)],
       templates:[event('rule','Thursday class',at('2026-10-01',9),at('2026-10-01',10))],
       removal:{events:[event('remove-event','Thursday class',at('2026-10-08',9),at('2026-10-08',10))],todos:[todo('remove-todo','Class prep',at('2026-10-08',8))]},
-      notes:{self:'',friend:''}, deferNotes:false,
+      notes:{self:'',friend:''}, deferNotes:false, noteLoadError:false,
       finishToggle(id,fail=false) {
         const pending=this.pendingToggles.find(p=>p.id===id); if(!pending) throw Error('No pending toggle '+id);
         this.pendingToggles=this.pendingToggles.filter(p=>p!==pending);
@@ -49,7 +49,8 @@ if (!process.versions.electron) {
         else row.completed_at=pending.done?new Date().toISOString():null;
         pending.resolve({...row});
       },
-      finishNote(){const pending=this.noteSaves.shift();if(!pending)throw Error('No pending note');this.notes[pending.personId]=pending.body;pending.resolve({body:pending.body});},
+      finishNote(mismatch){const pending=this.noteSaves.shift();if(!pending)throw Error('No pending note');const receipt={day:pending.day,person_id:pending.personId,body:pending.body,updated_at:new Date().toISOString()};if(mismatch==='body')receipt.body='';if(mismatch==='day')receipt.day='1900-01-01';if(mismatch==='person')receipt.person_id='wrong-profile';if(!mismatch)this.notes[pending.personId]=pending.body;pending.resolve(receipt);},
+      failNote(){const pending=this.noteSaves.shift();if(!pending)throw Error('No pending note');pending.reject(Error('Fixture note write failed'));},
       finishCreate(){const pending=this.pendingCreates.shift();if(!pending)throw Error('No pending create');const row=todo('quick-created',pending.input.title,pending.input.due_at);this.todos.push(row);pending.resolve(row);},
       finishConfig(personId){const pending=this.pendingConfigs.find(p=>p.personId===personId);if(!pending)throw Error('No pending config '+personId);this.pendingConfigs=this.pendingConfigs.filter(p=>p!==pending);pending.resolve({serverUrl:'https://caldav.icloud.com',username:personId+'@example.com',calendarName:personId+' calendar'});},
       finishEvents(personId){const pending=this.pendingEvents.find(p=>p.personId===personId);if(!pending)throw Error('No pending events '+personId);this.pendingEvents=this.pendingEvents.filter(p=>p!==pending);const row=event(personId+'-loaded',personId==='friend'?'Friend profile fixture':'Wrong profile fixture',at(today,9),at(today,10));row.person_id=personId;pending.resolve([row]);},
@@ -72,7 +73,7 @@ if (!process.versions.electron) {
       goals:{list:async()=>[]},
       reactions:{list:async()=>[],toggle:async()=>true},
       focus:{record:async input=>{record('focus.record',input);return true;},tray:()=>{},getTarget:async()=>4,stats:async()=>({streak:0,todaySessions:0,weekMinutes:0,weekSessions:0,target:4,targetMet:false}),sharedStreak:async()=>0},
-      notes:{get:async(day,personId)=>({day,person_id:personId,body:fixture.notes[personId]||'',updated_at:new Date().toISOString()}),set:(day,body,personId)=>{record('notes.set',{day,body,personId});return new Promise(resolve=>fixture.noteSaves.push({resolve,body,personId}));}},
+      notes:{get:async(day,personId)=>{if(fixture.noteLoadError)throw Error('Fixture note read failed');return {day,person_id:personId,body:fixture.notes[personId]||'',updated_at:new Date().toISOString()};},set:(day,body,personId)=>{record('notes.set',{day,body,personId});return new Promise((resolve,reject)=>fixture.noteSaves.push({resolve,reject,day,body,personId}));}},
       todos:{
         today:async()=>fixture.todos.map(t=>({...t})),list:async()=>fixture.todos.map(t=>({...t})),
         toggle:(id,done)=>{record('todos.toggle',{id,done});return new Promise((resolve,reject)=>fixture.pendingToggles.push({id,done,resolve,reject}));},
@@ -102,6 +103,8 @@ if (!process.versions.electron) {
     import TodayView from './src/renderer/src/views/TodayView';
     import SettingsView from './src/renderer/src/views/SettingsView';
     import NudgeToast from './src/renderer/src/components/NudgeToast';
+    import {flushPendingNotes} from './src/renderer/src/lib/notePersistence';
+    window.__flushNotes=flushPendingNotes;
     function ProfileProbe(){const profile=useProfile();return <div><button onClick={()=>profile.setActive('self')}>Fixture self filter</button><button onClick={()=>profile.setActive('friend')}>Fixture friend filter</button><button onClick={()=>profile.setActive('all')}>Fixture all filter</button></div>}
     function FocusProbe(){const focus=useFocus();const {self}=useProfile();return <div><button onClick={()=>focus.startAnchored(new Date(Date.now()).toISOString(),25,5)}>Fixture start focus</button><output data-focus={focus.started?'started':'stopped'} data-identity={self}/></div>}
     function Fixture(){const [view,setView]=useState('calendar');return <ProfileProvider><FocusProvider><div style={{maxWidth:1100,margin:'auto',padding:24}}><nav><button onClick={()=>setView('calendar')}>Fixture calendar</button><button onClick={()=>setView('today')}>Fixture today</button><button onClick={()=>setView('settings')}>Fixture settings</button><button onClick={()=>setView('nudges')}>Fixture nudges</button></nav><ProfileProbe/><FocusProbe/>{view==='calendar'?<CalendarView/>:view==='today'?<TodayView/>:view==='settings'?<SettingsView/>:<NudgeToast/>}</div></FocusProvider></ProfileProvider>}
@@ -308,6 +311,78 @@ if (!process.versions.electron) {
     await evaluate(() => __fixture.finishNote())
     await until(() => document.querySelector('textarea').closest('section').textContent.includes('Saved'), 'newer note saved')
 
+    await click('Fixture calendar')
+    await click('Fixture today')
+    await until(() => document.querySelector('textarea')?.value === 'Newer note draft' && !document.querySelector('textarea').disabled, 'acknowledged saved note survives editor remount')
+
+    await input('textarea', 'Close immediately draft')
+    await evaluate(() => { __fixture.flushDone=false;__fixture.flushError='';window.__flushNotes().then(()=>__fixture.flushDone=true,error=>__fixture.flushError=error.message); })
+    await until(() => __fixture.noteSaves.length === 1, 'quit flush starts before debounce')
+    await input('textarea', 'Final draft while closing')
+    await evaluate(() => __fixture.finishNote())
+    await until(() => __fixture.noteSaves.length === 1 && __fixture.noteSaves[0].body === 'Final draft while closing', 'quit flush includes text typed while first write is pending')
+    assert.equal(await evaluate(() => __fixture.flushDone), false, 'quit cannot complete before the latest draft acknowledgement')
+    await evaluate(() => __fixture.finishNote())
+    await until(() => __fixture.flushDone, 'latest draft acknowledged before quit')
+    assert.equal(await evaluate(() => __fixture.flushError), '')
+    await click('Fixture calendar')
+    await click('Fixture today')
+    await until(() => document.querySelector('textarea')?.value === 'Final draft while closing' && !document.querySelector('textarea').disabled, 'final quit-flushed note survives reopen')
+
+    await input('textarea', 'Unmounted draft')
+    await click('Fixture calendar')
+    await until(() => __fixture.noteSaves.length === 1, 'unmount starts note save')
+    await evaluate(() => __fixture.failNote())
+    await wait(60)
+    await evaluate(() => { __fixture.flushDone=false;__fixture.flushError='';window.__flushNotes().then(()=>__fixture.flushDone=true,error=>__fixture.flushError=error.message); })
+    await until(() => __fixture.noteSaves.length === 1 && __fixture.noteSaves[0].body === 'Unmounted draft', 'quit retries failed draft from unmounted editor')
+    await evaluate(() => __fixture.finishNote())
+    await until(() => __fixture.flushDone, 'unmounted draft retry acknowledged')
+    await click('Fixture today')
+    await until(() => document.querySelector('textarea')?.value === 'Unmounted draft' && !document.querySelector('textarea').disabled, 'unmounted note draft remains after reopen')
+
+    await input('textarea', 'Obsolete failed draft')
+    await click('Fixture calendar')
+    await until(() => __fixture.noteSaves.length === 1, 'obsolete editor starts save')
+    await evaluate(() => __fixture.failNote())
+    await wait(60)
+    await click('Fixture today')
+    await until(() => document.querySelector('textarea')?.value === 'Obsolete failed draft' && !document.querySelector('textarea').disabled && __fixture.noteSaves.length === 1, 'replacement editor adopts failed draft')
+    await evaluate(() => __fixture.finishNote())
+    await until(() => document.querySelector('textarea').closest('section').textContent.includes('Saved'), 'replacement saves recovered draft')
+    await input('textarea', 'Newer acknowledged note')
+    await evaluate(() => { __fixture.flushDone=false;window.__flushNotes().then(()=>__fixture.flushDone=true,error=>__fixture.flushError=error.message); })
+    await until(() => __fixture.noteSaves.length === 1, 'replacement saves newer note')
+    await evaluate(() => __fixture.finishNote())
+    await until(() => __fixture.flushDone, 'replacement newer save acknowledged')
+    await evaluate(() => window.__flushNotes())
+    assert.equal(await evaluate(() => __fixture.noteSaves.length), 0, 'quit must never retry an obsolete inactive editor over a newer Saved note')
+    assert.equal(await evaluate(() => __fixture.notes.self), 'Newer acknowledged note')
+
+    for (const mismatch of ['body', 'day', 'person']) {
+      await input('textarea', `Verified receipt ${mismatch}`)
+      await evaluate(() => { __fixture.flushError='';window.__flushNotes().catch(error=>__fixture.flushError=error.message); })
+      await until(() => __fixture.noteSaves.length === 1, 'receipt validation save begins')
+      await evaluate(mismatch => __fixture.finishNote(mismatch), mismatch)
+      await until(() => __fixture.flushError.includes('did not match') && document.querySelector('textarea').closest('section').textContent.includes('Not saved'), `wrong ${mismatch} receipt cannot mark note Saved`)
+      assert.equal(await evaluate(() => localStorage.getItem('doneline.noteDraft:'+__fixture.today+':self')), `Verified receipt ${mismatch}`, 'unverified receipt retains the recovery draft')
+      await click('Retry save')
+      await until(() => __fixture.noteSaves.length === 1, 'retry after rejected receipt')
+      await evaluate(() => __fixture.finishNote())
+      await until(() => document.querySelector('textarea').closest('section').textContent.includes('Saved'), 'verified retry marks Saved')
+    }
+
+    await click('Fixture calendar')
+    await evaluate(() => { __fixture.noteLoadError=true;localStorage.setItem('doneline.noteDraft:'+__fixture.today+':self','Recovered local draft'); })
+    await click('Fixture today')
+    await until(() => document.querySelector('textarea')?.value === 'Recovered local draft' && !document.querySelector('textarea').disabled && document.querySelector('textarea').closest('section').textContent.includes('local draft is shown'), 'failed startup read exposes recovered draft')
+    assert.equal(await evaluate(() => __fixture.noteSaves.length), 0, 'failed read never blindly writes the recovery draft')
+    await evaluate(() => { __fixture.noteLoadError=false })
+    await click('Retry save')
+    await until(() => __fixture.noteSaves.length === 1, 'explicit recovered draft save')
+    await evaluate(() => __fixture.finishNote())
+    await until(() => document.querySelector('textarea').closest('section').textContent.includes('Saved'), 'recovered draft saved')
+
     await evaluate(() => { __fixture.deferCreates = true })
     await input('input[placeholder^="Quick add"]', 'Task A')
     await evaluate(() => {
@@ -390,7 +465,7 @@ if (!process.versions.electron) {
     assert.equal(focusRecord.durationSeconds, 90)
     assert.deepEqual(await evaluate(() => __fixture.errors), [], 'no renderer errors or unhandled rejections')
     win.destroy()
-    console.log(`Renderer checks passed: bounded weekdays, date/time validation, all-day ends, repeat/remote occurrence editing, repeat confirmation refresh, grid overlap, explicit browser timezone, range preview/delete, calendar data/profile race, instant count, shared completion, rollback, note race protection, quick-add duplicates/drafts, calendar credentials/profile race, identity failure, downloaded update snapshot and unsigned Mac download action, nudge receipt retries/deduplication, focus owner attribution. Screenshot: ${screenshot}`)
+    console.log(`Renderer checks passed: bounded weekdays, date/time validation, all-day ends, repeat/remote occurrence editing, repeat confirmation refresh, grid overlap, explicit browser timezone, range preview/delete, calendar data/profile race, instant count, shared completion, rollback, note race protection, quit flush with newer edits, unmounted failed save retry, replacement editor ownership, verified note receipts, failed read draft recovery, quick-add duplicates/drafts, calendar credentials/profile race, identity failure, downloaded update snapshot and unsigned Mac download action, nudge receipt retries/deduplication, focus owner attribution. Screenshot: ${screenshot}`)
   }
   run().then(() => app.quit()).catch(error => { console.error(error); for (const win of BrowserWindow.getAllWindows()) win.destroy(); app.exit(1) })
 }

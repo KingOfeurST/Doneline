@@ -33,6 +33,7 @@ function fixture(options = {}) {
     emit: (status) => emitted.push(status),
     openExternal: async (url) => { external.push(url); await options.open?.() },
     setQuitting: (value) => quitting.push(value),
+    prepareForInstall: options.prepare,
     schedule: (callback, milliseconds) => {
       assert.equal(milliseconds, 6 * 60 * 60 * 1000)
       interval = callback
@@ -104,6 +105,54 @@ test('concurrent checks share a request and check failures become retained error
   reject(Error('Offline'))
   const statuses = await Promise.all([first, second])
   assert.ok(statuses.every((status) => status.state === 'error' && status.message === 'Offline'))
+  f.controller.dispose()
+})
+
+test('update installation waits for editors to save before closing their windows', async () => {
+  let finishSave
+  let flushes = 0
+  const f = fixture({ prepare: () => {
+    flushes++
+    return new Promise((resolve) => { finishSave = resolve })
+  } })
+  await f.controller.status()
+  f.updater.emit('update-downloaded', { version: '0.3.5' })
+  const install = f.controller.install()
+  await new Promise(setImmediate)
+  await f.controller.install()
+  assert.equal(flushes, 1)
+  assert.equal(f.updater.installs, 0)
+  assert.deepEqual(f.quitting, [])
+  finishSave()
+  await install
+  assert.equal(f.updater.installs, 1)
+  assert.deepEqual(f.quitting, [true])
+  f.controller.dispose()
+})
+
+test('failed editor flush prevents update installation and reports its failure', async () => {
+  const f = fixture({ prepare: async () => { throw Error('Note save failed') } })
+  await f.controller.status()
+  f.updater.emit('update-downloaded', { version: '0.3.5' })
+  await assert.rejects(f.controller.install(), /Note save failed/)
+  assert.equal(f.updater.installs, 0)
+  assert.equal((await f.controller.status()).message, 'Note save failed')
+  assert.ok(!f.quitting.includes(true))
+  f.controller.dispose()
+})
+
+test('an updater failure during editor saving cannot install an invalidated update', async () => {
+  let finishSave
+  const f = fixture({ prepare: () => new Promise((resolve) => { finishSave = resolve }) })
+  await f.controller.status()
+  f.updater.emit('update-downloaded', { version: '0.3.5' })
+  const install = f.controller.install()
+  await new Promise(setImmediate)
+  f.updater.emit('error', Error('Update became unavailable'))
+  finishSave()
+  await assert.rejects(install, /Update became unavailable/)
+  assert.equal(f.updater.installs, 0)
+  assert.ok(!f.quitting.includes(true))
   f.controller.dispose()
 })
 

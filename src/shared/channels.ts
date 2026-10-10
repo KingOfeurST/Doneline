@@ -83,6 +83,7 @@ export const CH = {
 
   notesGet: 'notes:get',
   notesSet: 'notes:set',
+  quitReady: 'app:quitReady',
 
   today: 'app:today',
   appPlatform: 'app:platform'
@@ -91,6 +92,7 @@ export const CH = {
 /** Main → renderer push events. */
 export const EVT = {
   workspaceChanged: 'workspace:changed',
+  prepareQuit: 'app:prepareQuit',
   updateStatus: 'update:status'
 } as const
 

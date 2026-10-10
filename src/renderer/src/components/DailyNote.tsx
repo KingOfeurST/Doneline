@@ -2,10 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { useProfile } from '../profile'
 import type { Person } from '../../../shared/api'
-import { KeyedSerialQueue } from '../lib/serialQueue'
+import { forgetNoteDraft, pendingNoteDraft, queueNoteWrite, registerNoteEditor, rememberNoteDraft, waitForNoteWrites } from '../lib/notePersistence'
 
 const SAVE_DEBOUNCE_MS = 800
-const writes = new KeyedSerialQueue()
 
 interface Props {
   day: string
@@ -40,7 +39,7 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
   const mounted = useRef(true)
   const revision = useRef(0)
   const requestId = useRef(0)
-  const writing = useRef(new Set<number>())
+  const writing = useRef(new Map<number, Promise<void>>())
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const areaRef = useRef<HTMLTextAreaElement>(null)
@@ -56,13 +55,19 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
       timer.current = null
     }
     const p = pending.current
-    if (!p || writing.current.has(p.revision)) return
-    writing.current.add(p.revision)
+    if (!p) return Promise.resolve()
+    const existing = writing.current.get(p.revision)
+    if (existing) return existing
+    requestId.current++
     // Serialize writes to this note so an earlier slow save cannot arrive last.
-    writes.run(draftKey, () => api.notes.set(day, p.body, personId))
-      .then(() => {
+    const operation = queueNoteWrite(draftKey, async () => {
+        const persisted = await api.notes.set(day, p.body, personId)
+        if (persisted.day !== day || persisted.person_id !== personId || persisted.body !== p.body) {
+          throw new Error('The saved note did not match your draft.')
+        }
         if (pending.current?.revision !== p.revision) return
         pending.current = null
+        forgetNoteDraft(draftKey, p.revision)
         try {
           if (localStorage.getItem(draftKey) === p.body) localStorage.removeItem(draftKey)
         } catch {}
@@ -73,13 +78,16 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
         if (savedTimer.current) clearTimeout(savedTimer.current)
         savedTimer.current = setTimeout(() => setSaved(false), 1600)
       })
-      .catch(() => {
+      .catch((cause) => {
         if (mounted.current && pending.current?.revision === p.revision) {
           setError('Could not save. Your draft is kept on this device.')
           setSaved(false)
         }
+        throw cause
       })
       .finally(() => writing.current.delete(p.revision))
+    writing.current.set(p.revision, operation)
+    return operation
   }, [day, personId, draftKey])
 
   // Load when the day or the selected person changes. Flush first so text typed
@@ -88,20 +96,49 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
     if (!day || !personId) return
     let cancelled = false
     const request = ++requestId.current
-    writes.wait(draftKey).then(() => api.notes.get(day, personId)).then((n) => {
+    // Show a preserved draft even if the database read later fails at startup.
+    let recovered = pendingNoteDraft(draftKey)
+    if (!recovered) {
+      try {
+        const draft = localStorage.getItem(draftKey)
+        if (draft !== null) recovered = rememberNoteDraft(draftKey, draft)
+      } catch {}
+    }
+    if (recovered) {
+      pending.current = recovered
+      revision.current++
+      setBody(recovered.body)
+      setDirty(true)
+    }
+    waitForNoteWrites(draftKey).then(() => api.notes.get(day, personId)).then((n) => {
       if (cancelled || request !== requestId.current) return
-      let draft: string | null = null
-      try { draft = localStorage.getItem(draftKey) } catch {}
-      setBody(draft ?? n.body)
-      if (draft !== null) {
-        pending.current = { body: draft, revision: ++revision.current }
-        setDirty(true)
-        flush()
+      let draft = pendingNoteDraft(draftKey)
+      if (!draft) {
+        try {
+          const stored = localStorage.getItem(draftKey)
+          if (stored !== null) draft = rememberNoteDraft(draftKey, stored)
+        } catch {}
       }
+      setBody(draft?.body ?? n.body)
+      pending.current = draft
+      if (draft) {
+        revision.current++
+        setDirty(true)
+        void flush().catch(() => {})
+      } else setDirty(false)
     }).catch(() => {
-      if (!cancelled) {
-        setLoadFailed(true)
-        setError('Could not load this note. Please reopen it to try again.')
+      if (!cancelled && request === requestId.current) {
+        const draft = pendingNoteDraft(draftKey)
+        if (draft) {
+          setBody(draft.body)
+          pending.current = draft
+          revision.current++
+          setDirty(true)
+          setError('Could not load the saved note. Your local draft is shown below.')
+        } else {
+          setLoadFailed(true)
+          setError('Could not load this note. Please reopen it to try again.')
+        }
       }
     }).finally(() => {
       if (!cancelled) setLoading(false)
@@ -128,11 +165,14 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
   // cancelled would silently discard the last keystrokes.
   useEffect(() => {
     mounted.current = true
-    window.addEventListener('beforeunload', flush)
+    const unregister = registerNoteEditor(draftKey, () => pending.current !== null, flush)
+    const beforeUnload = () => { void flush().catch(() => {}) }
+    window.addEventListener('beforeunload', beforeUnload)
     return () => {
       mounted.current = false
-      window.removeEventListener('beforeunload', flush)
-      flush()
+      window.removeEventListener('beforeunload', beforeUnload)
+      void flush().catch(() => {})
+      unregister()
       if (savedTimer.current) clearTimeout(savedTimer.current)
     }
   }, [flush])
@@ -142,12 +182,13 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
     setSaved(false)
     setError('')
     setDirty(true)
-    pending.current = { body: next, revision: ++revision.current }
+    revision.current++
+    pending.current = rememberNoteDraft(draftKey, next)
     // Preserve the final keystrokes if the window closes before IPC finishes.
     try { localStorage.setItem(draftKey, next) } catch {}
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
-      flush()
+      void flush().catch(() => {})
     }, SAVE_DEBOUNCE_MS)
   }
 
@@ -198,7 +239,7 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
       />
       {error && <div role="alert" className="px-5 pb-4 text-xs font-semibold text-rose-ink">
         {error}
-        {pending.current && <button onClick={flush} className="ml-2 underline">Retry save</button>}
+        {pending.current && <button onClick={() => { void flush().catch(() => {}) }} className="ml-2 underline">Retry save</button>}
       </div>}
     </section>
   )
