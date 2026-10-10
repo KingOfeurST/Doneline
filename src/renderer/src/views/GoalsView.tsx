@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { Goal, TodoWithGoal } from '../../../shared/api'
 import { useProfile } from '../profile'
@@ -7,9 +7,11 @@ import TodoRow from '../components/TodoRow'
 import AddTodoModal from '../components/AddTodoModal'
 import GoalDetail from './GoalDetail'
 import { PALETTE } from '../lib/colors'
+import { isTodoDoneForSelf } from '../lib/todoCompletion'
+import { useTodoCompletion } from '../lib/useTodoCompletion'
 
 export default function GoalsView() {
-  const { active, queryPersonId, defaultOwnerId, personById, tick } = useProfile()
+  const { active, queryPersonId, defaultOwnerId, personById, tick, self, people } = useProfile()
   const combined = active === 'all'
   const [goals, setGoals] = useState<Goal[]>([])
   const [todos, setTodos] = useState<TodoWithGoal[]>([])
@@ -20,31 +22,60 @@ export default function GoalsView() {
   const [addTodoGoal, setAddTodoGoal] = useState<{ id: string; ownerId: string } | null>(null)
   const [openGoalId, setOpenGoalId] = useState<string | null>(null)
   const [editGoal, setEditGoal] = useState<Goal | null>(null)
+  const [saving, setSaving] = useState(false)
+  const savingRef = useRef(false)
+  const completion = useTodoCompletion(self, people.map((p) => p.id))
+  const { guard, setError } = completion
 
   const load = useCallback(async () => {
-    setGoals(await api.goals.list({ personId: queryPersonId }))
-    setTodos(await api.todos.list({ includeCompleted: true, personId: queryPersonId }))
-  }, [queryPersonId, tick])
+    const request = guard.beginLoad()
+    try {
+      const [loadedGoals, loadedTodos] = await Promise.all([
+        api.goals.list({ personId: queryPersonId }),
+        api.todos.list({ includeCompleted: true, personId: queryPersonId })
+      ])
+      if (!guard.isCurrent(request)) return
+      setGoals(loadedGoals)
+      setTodos(guard.applyPending(loadedTodos))
+    } catch (cause) {
+      if (guard.isCurrent(request)) setError(cause instanceof Error ? cause.message : 'Could not load goals.')
+    }
+  }, [queryPersonId, tick, guard, setError])
+  const latestLoad = useRef(load)
+  latestLoad.current = load
 
   useEffect(() => {
     load()
+    window.addEventListener('doneline:todos', load)
+    return () => { window.removeEventListener('doneline:todos', load) }
   }, [load])
 
   async function saveGoal() {
-    if (!title.trim()) return
-    if (editGoal) {
-      // `shared` is deliberately not editable: flipping it on a goal with
-      // existing completions would silently change what "done" means.
-      await api.goals.update(editGoal.id, { title, color })
-    } else {
-      await api.goals.create({ title, color, person_id: defaultOwnerId, shared })
+    if (!title.trim() || savingRef.current) return
+    savingRef.current = true
+    setSaving(true)
+    setError('')
+    try {
+      if (editGoal) {
+        // `shared` is deliberately not editable: flipping it on a goal with
+        // existing completions would silently change what "done" means.
+        const updated = await api.goals.update(editGoal.id, { title, color })
+        if (!updated) throw new Error('This goal no longer exists.')
+      } else {
+        await api.goals.create({ title, color, person_id: defaultOwnerId, shared })
+      }
+      setTitle('')
+      setColor(PALETTE[0].value)
+      setShared(false)
+      setShowAdd(false)
+      setEditGoal(null)
+      await latestLoad.current()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save this goal. Please try again.')
+    } finally {
+      savingRef.current = false
+      setSaving(false)
     }
-    setTitle('')
-    setColor(PALETTE[0].value)
-    setShared(false)
-    setShowAdd(false)
-    setEditGoal(null)
-    load()
   }
 
   function startEditGoal(g: Goal) {
@@ -63,16 +94,29 @@ export default function GoalsView() {
   }
 
   async function removeGoal(id: string) {
-    await api.goals.remove(id)
-    load()
+    try {
+      await api.goals.remove(id)
+      await latestLoad.current()
+      return true
+    } catch {
+      setError('Could not delete this goal. Please try again.')
+      return false
+    }
   }
-  async function toggle(id: string) {
-    await api.todos.toggle(id)
-    load()
+  function toggle(id: string) {
+    const todo = todos.find((t) => t.id === id)
+    if (!todo) return
+    return completion.toggle(todo, (updated) => {
+      setTodos((prev) => prev.map((t) => t.id === updated.id ? updated : t))
+    }, () => latestLoad.current())
   }
   async function removeTodo(id: string) {
-    await api.todos.remove(id)
-    load()
+    try {
+      await api.todos.remove(id)
+      await latestLoad.current()
+    } catch {
+      setError('Could not delete this todo. Please try again.')
+    }
   }
 
   const openGoal = goals.find((g) => g.id === openGoalId)
@@ -86,6 +130,7 @@ export default function GoalsView() {
       onClose={closeGoalModal}
     >
       <div className="space-y-4">
+        {completion.error && <p role="alert" className="text-sm font-semibold text-rose-ink">{completion.error}</p>}
         <input
           autoFocus
           className="input"
@@ -123,8 +168,8 @@ export default function GoalsView() {
           <button className="btn-soft" onClick={closeGoalModal}>
             Cancel
           </button>
-          <button className="btn-primary" onClick={saveGoal} disabled={!title.trim()}>
-            {editGoal ? 'Save changes' : 'Create'}
+          <button className="btn-primary" onClick={saveGoal} disabled={!title.trim() || saving}>
+            {saving ? 'Saving…' : editGoal ? 'Save changes' : 'Create'}
           </button>
         </div>
       </div>
@@ -137,11 +182,10 @@ export default function GoalsView() {
         <GoalDetail
           goal={openGoal}
           onBack={() => setOpenGoalId(null)}
-          onChanged={load}
+          onChanged={() => latestLoad.current()}
           onEdit={() => startEditGoal(openGoal)}
           onDelete={async () => {
-            await removeGoal(openGoal.id)
-            setOpenGoalId(null)
+            if (await removeGoal(openGoal.id)) setOpenGoalId(null)
           }}
         />
         {goalModal}
@@ -151,6 +195,7 @@ export default function GoalsView() {
 
   return (
     <div className="space-y-6">
+      {completion.error && <p role="alert" className="text-sm font-semibold text-rose-ink">{completion.error}</p>}
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-extrabold text-ink">Goals</h1>
         <button className="btn-primary py-2 text-sm" onClick={() => setShowAdd(true)}>
@@ -168,7 +213,7 @@ export default function GoalsView() {
         {goals.map((g, i) => {
           // Todos still visible today (archived ones have been swept out of this list).
           const linked = todos.filter((t) => t.goal_id === g.id)
-          const openTodos = linked.filter((t) => !t.completed_at)
+          const openTodos = linked.filter((t) => !isTodoDoneForSelf(t, self))
           // Counts come from the DB and include archived todos, so progress
           // doesn't reset when completed items get swept to the archive.
           const total = g.todo_total
@@ -242,6 +287,7 @@ export default function GoalsView() {
                         onDelete={removeTodo}
                         showOwner={combined}
                         hideGoal
+                        pending={completion.pendingIds.has(t.id)}
                       />
                     ))
                 )}
@@ -275,7 +321,7 @@ export default function GoalsView() {
       <AddTodoModal
         open={addTodoGoal !== null}
         onClose={() => setAddTodoGoal(null)}
-        onCreated={load}
+        onCreated={() => latestLoad.current()}
         goalId={addTodoGoal?.id}
         ownerId={addTodoGoal?.ownerId}
       />

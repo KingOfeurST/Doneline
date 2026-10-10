@@ -2,6 +2,8 @@ import { v4 as uuid } from 'uuid'
 import { getDb } from './db.js'
 import { primaryPersonId } from './people.js'
 import type { Goal } from './types.js'
+import { deleteTodo } from './todos.js'
+import { itemTitle } from './validation.js'
 
 // Progress counts live in SQL so archived todos still count — otherwise a goal's
 // progress bar silently resets every time completed todos get swept to the archive.
@@ -20,7 +22,7 @@ export function listGoals(opts: { includeArchived?: boolean; personId?: string }
   const args: string[] = []
   if (!opts.includeArchived) where.push('g.archived = 0')
   if (opts.personId && opts.personId !== 'all') {
-    where.push('g.person_id = ?')
+    where.push('(g.person_id = ? OR g.shared = 1)')
     args.push(opts.personId)
   }
   const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
@@ -41,10 +43,12 @@ export function createGoal(input: {
 }): Goal {
   const db = getDb()
   const id = uuid()
+  const owner = input.person_id || primaryPersonId()
+  if (!db.prepare('SELECT 1 FROM people WHERE id = ?').get(owner)) throw new Error('This profile no longer exists.')
   db.prepare('INSERT INTO goals (id, person_id, title, color, shared) VALUES (?, ?, ?, ?, ?)').run(
     id,
-    input.person_id || primaryPersonId(),
-    input.title.trim(),
+    owner,
+    itemTitle(input.title),
     input.color || '#2f7a4d',
     input.shared ? 1 : 0
   )
@@ -59,7 +63,7 @@ export function updateGoal(
   const current = getGoal(id)
   if (!current) return undefined
   db.prepare('UPDATE goals SET title = ?, color = ?, archived = ? WHERE id = ?').run(
-    patch.title ?? current.title,
+    itemTitle(patch.title ?? current.title),
     patch.color ?? current.color,
     patch.archived ?? current.archived,
     id
@@ -69,12 +73,19 @@ export function updateGoal(
 
 export function deleteGoal(id: string): void {
   const db = getDb()
-  // Kill recurring templates tied to this goal before the FK goes NULL.
+  const remove = () => deleteGoalInTransaction(id)
+  if (db.inTransaction) remove()
+  else db.transaction(remove).immediate()
+}
+
+function deleteGoalInTransaction(id: string): void {
+  const db = getDb()
+  // The confirmation promises to remove the goal and all its linked work.
   const tplIds = (
-    db.prepare('SELECT id FROM todos WHERE goal_id = ? AND recurrence IS NOT NULL').all(id) as { id: string }[]
+    db.prepare('SELECT id FROM todos WHERE goal_id = ? ORDER BY recurrence IS NULL').all(id) as { id: string }[]
   ).map((r) => r.id)
   for (const tplId of tplIds) {
-    db.prepare('DELETE FROM todos WHERE id = ? OR recur_parent = ?').run(tplId, tplId)
+    deleteTodo(tplId)
   }
   db.prepare('DELETE FROM goals WHERE id = ?').run(id)
 }

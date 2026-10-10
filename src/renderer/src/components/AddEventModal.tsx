@@ -4,8 +4,10 @@ import { api } from '../api'
 import { useProfile } from '../profile'
 import { PALETTE } from '../lib/colors'
 import { toISO, localDateInput, localTimeInput } from '../lib/format'
-import RecurrencePicker from './RecurrencePicker'
+import RecurrencePicker, { recurrenceError } from './RecurrencePicker'
+import { localDay, nextDay } from '../lib/calendarLayout'
 import type { Recurrence, CalEvent } from '../../../shared/api'
+import { parseRecurrence } from '../../../../core/recurrenceRules'
 
 interface Props {
   open: boolean
@@ -33,14 +35,20 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
   const [color, setColor] = useState(PALETTE[0].value)
   const [recurrence, setRecurrence] = useState<Recurrence | null>(null)
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
 
   const editing = !!editEvent
+  const editingRule = !!editEvent?.recurrence
+  const canEditRepeat = !editEvent?.recur_parent && !editEvent?.caldav_uid
 
   useEffect(() => {
     if (!open) return
+    setError('')
+    setSaving(false)
     if (editEvent) {
       const s = new Date(editEvent.starts_at)
-      const e = new Date(editEvent.ends_at)
+      // All-day ends are exclusive; the form shows the last included day.
+      const e = new Date(new Date(editEvent.ends_at).getTime() - (editEvent.all_day ? 1 : 0))
       setTitle(editEvent.title)
       setOwner(editEvent.shared === 1 ? SHARED : editEvent.person_id)
       setDate(localDateInput(s))
@@ -51,7 +59,9 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
       setLocation(editEvent.location ?? '')
       setAttendees(editEvent.attendees ?? '')
       setColor(editEvent.color || PALETTE[0].value)
-      setRecurrence(null)
+      const rule = parseRecurrence(editEvent.recurrence, localDateInput(s))
+      setRecurrence(rule)
+      if (editEvent.recurrence && !rule) setError('The saved repeat rule is invalid. Choose a new schedule, or save without repeating to stop it.')
     } else {
       setTitle('')
       setOwner(ownerId || people[0]?.id || '')
@@ -69,17 +79,34 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
   }, [open, defaultDate, editEvent])
 
   async function submit() {
-    if (!title.trim() || !date) return
-    setSaving(true)
-    const last = endDate && endDate >= date ? endDate : date // multi-day if end > start
-    const starts_at = allDay ? toISO(date, '00:00') : toISO(date, start)
-    const ends_at = allDay ? toISO(last, '23:59') : toISO(last, end)
+    if (saving) return
+    const validation = recurrenceError(recurrence)
+    if (!title.trim() || !date) { setError('Enter a title and an event date.'); return }
+    if (endDate && endDate < date) { setError('The event end date must be on or after its start date.'); return }
+    if (validation) { setError(validation); return }
+    if (!allDay && (!start || !end)) { setError('Choose a start and end time.'); return }
+    const last = endDate || date
+    let starts_at: string
+    let ends_at: string
+    try {
+      starts_at = toISO(date, allDay ? '00:00' : start)
+      ends_at = allDay ? nextDay(localDay(last)).toISOString() : toISO(last, end)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Choose a valid event date and time.')
+      return
+    }
+    if (new Date(ends_at) <= new Date(starts_at)) { setError('The event must end after it starts. For an overnight event, choose the next end date.'); return }
     const shared = owner === SHARED
-    const person_id = shared ? ownerId || people[0]?.id : owner
+    const person_id = shared ? editEvent?.person_id || ownerId || people[0]?.id : owner
+    if (!person_id) { setError('Choose an owner.'); return }
+    setSaving(true)
+    setError('')
+    const rec = recurrence ? JSON.stringify({ ...recurrence, startDate: recurrence.startDate || date }) : null
 
-    if (editing && editEvent) {
-      await api.events.update(editEvent.id, {
-        title,
+    try {
+      if (editing && editEvent) {
+        await api.events.update(editEvent.id, {
+        title: title.trim(),
         person_id,
         starts_at,
         ends_at,
@@ -87,11 +114,12 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
         shared: shared ? 1 : 0,
         location: location || null,
         attendees: attendees || null,
-        color
-      })
-    } else {
-      await api.events.create({
-        title,
+        color,
+        ...(canEditRepeat ? { recurrence: rec } : {})
+        })
+      } else {
+        await api.events.create({
+        title: title.trim(),
         person_id,
         starts_at,
         ends_at,
@@ -100,18 +128,22 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
         location: location || null,
         attendees: attendees || null,
         color,
-        recurrence: recurrence ? JSON.stringify(recurrence) : null
-      })
-      if (recurrence) await api.maintenance()
-    }
-    setSaving(false)
-    onCreated()
-    onClose()
+        recurrence: rec
+        })
+      }
+      onCreated()
+      onClose()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save this event. Please try again.')
+    } finally { setSaving(false) }
   }
 
   return (
-    <Modal title={editing ? 'Edit event' : 'Add event'} open={open} onClose={onClose}>
-      <div className="space-y-4">
+    <Modal title={editingRule ? 'Edit repeating event' : editing ? 'Edit event' : 'Add event'} open={open} onClose={() => { if (!saving) onClose() }}>
+      <fieldset disabled={saving} className="space-y-4">
+        {editEvent?.recur_parent && <p className="text-xs font-semibold text-slate-500">Changes apply to this occurrence. Use Repeating events to change the schedule.</p>}
+        {editEvent?.caldav_recurrence_id && <p className="text-xs font-semibold text-slate-500">Changes apply to this occurrence. Change the repeating schedule in Apple Calendar.</p>}
+        {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-ink">{error}</p>}
         <input
           autoFocus
           className="input"
@@ -131,13 +163,14 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
 
         <div className="flex items-center gap-2">
           <div className="flex-1">
-            <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">Start</p>
-            <input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
+            <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">Event start date</p>
+            <input type="date" aria-label="Event start date" className="input" value={date} onChange={(e) => setDate(e.target.value)} />
           </div>
           <div className="flex-1">
-            <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">End (optional)</p>
+            <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">Event end date (optional)</p>
             <input
               type="date"
+              aria-label="Event end date"
               className="input"
               value={endDate}
               min={date}
@@ -153,8 +186,8 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
 
         {!allDay && (
           <div className="flex gap-3">
-            <input type="time" className="input" value={start} onChange={(e) => setStart(e.target.value)} />
-            <input type="time" className="input" value={end} onChange={(e) => setEnd(e.target.value)} />
+            <input type="time" aria-label="Event start time" className="input" value={start} onChange={(e) => setStart(e.target.value)} />
+            <input type="time" aria-label="Event end time" className="input" value={end} onChange={(e) => setEnd(e.target.value)} />
           </div>
         )}
 
@@ -185,22 +218,22 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
           ))}
         </div>
 
-        {!editing && (
+        {canEditRepeat && (
           <div>
             <p className="mb-1 text-xs font-bold uppercase tracking-wide text-slate-400">Repeat</p>
-            <RecurrencePicker value={recurrence} onChange={setRecurrence} />
+            <RecurrencePicker value={recurrence} onChange={setRecurrence} defaultStartDate={date} />
           </div>
         )}
 
         <div className="flex justify-end gap-3 pt-2">
-          <button className="btn-soft" onClick={onClose}>
+          <button className="btn-soft" onClick={onClose} disabled={saving}>
             Cancel
           </button>
           <button className="btn-primary" onClick={submit} disabled={saving || !title.trim()}>
-            {editing ? 'Save changes' : 'Add event'}
+            {saving ? 'Saving…' : editing ? 'Save changes' : 'Add event'}
           </button>
         </div>
-      </div>
+      </fieldset>
     </Modal>
   )
 }

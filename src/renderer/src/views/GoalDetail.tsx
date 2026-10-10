@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { Goal, Recurrence, TodoWithGoal } from '../../../shared/api'
 import { useProfile } from '../profile'
 import TodoRow from '../components/TodoRow'
 import AddTodoModal from '../components/AddTodoModal'
+import { isTodoDoneForSelf } from '../lib/todoCompletion'
+import { useTodoCompletion } from '../lib/useTodoCompletion'
 
 interface Props {
   goal: Goal
@@ -54,41 +56,68 @@ function dayLabel(key: string): string {
 }
 
 export default function GoalDetail({ goal, onBack, onChanged, onEdit, onDelete }: Props) {
-  const { active, personById } = useProfile()
+  const { active, personById, self, people, tick } = useProfile()
   const combined = active === 'all'
   const [bundle, setBundle] = useState<Bundle | null>(null)
   const [showAdd, setShowAdd] = useState(false)
   const [editTodo, setEditTodo] = useState<TodoWithGoal | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const completion = useTodoCompletion(self, people.map((p) => p.id))
+  const { guard, setError } = completion
 
   const load = useCallback(async () => {
-    setBundle(await api.todos.forGoal(goal.id))
-  }, [goal.id])
+    const request = guard.beginLoad()
+    try {
+      const loaded = await api.todos.forGoal(goal.id)
+      if (!guard.isCurrent(request)) return
+      setBundle({ ...loaded, open: guard.applyPending(loaded.open), done: guard.applyPending(loaded.done) })
+    } catch (cause) {
+      if (guard.isCurrent(request)) setError(cause instanceof Error ? cause.message : 'Could not load this goal.')
+    }
+  }, [goal.id, tick, guard, setError])
+  const latestLoad = useRef(load)
+  latestLoad.current = load
 
   useEffect(() => {
     load()
   }, [load])
 
-  async function toggle(id: string) {
-    await api.todos.toggle(id)
-    load()
-    onChanged()
+  function toggle(id: string) {
+    const todo = [...(bundle?.open ?? []), ...(bundle?.done ?? [])].find((t) => t.id === id)
+    if (!todo) return
+    return completion.toggle(todo, (updated) => {
+      setBundle((prev) => {
+        if (!prev) return prev
+        const rows = [...prev.open, ...prev.done].map((t) => t.id === updated.id ? updated : t)
+        return { ...prev, open: rows.filter((t) => t.completed_at === null), done: rows.filter((t) => t.completed_at !== null) }
+      })
+    }, async () => {
+      await latestLoad.current()
+      onChanged()
+    })
   }
   async function remove(id: string) {
-    await api.todos.remove(id)
-    load()
-    onChanged()
+    try {
+      await api.todos.remove(id)
+      await latestLoad.current()
+      onChanged()
+    } catch {
+      setError('Could not delete this todo. Please try again.')
+    }
   }
 
   const owner = personById(goal.person_id)
-  const total = goal.todo_total
-  const done = goal.todo_done
+  const actionable = bundle ? [...bundle.open, ...bundle.done] : []
+  const openTasks = actionable.filter((t) => !isTodoDoneForSelf(t, self))
+  const finishedTasks = actionable.filter((t) => isTodoDoneForSelf(t, self))
+  const total = bundle ? actionable.length : goal.todo_total
+  const done = bundle ? actionable.filter((t) => t.completed_at !== null).length : goal.todo_done
   const pct = total ? Math.round((done / total) * 100) : 0
   const complete = total > 0 && done === total
 
   // Finished work, newest day first, so the page reads as a history.
   const doneByDay = new Map<string, TodoWithGoal[]>()
-  for (const t of bundle?.done ?? []) {
+  for (const t of finishedTasks) {
     const k = t.completed_at ? dayKey(t.completed_at) : 'unknown'
     const list = doneByDay.get(k) ?? []
     list.push(t)
@@ -98,6 +127,7 @@ export default function GoalDetail({ goal, onBack, onChanged, onEdit, onDelete }
 
   return (
     <div className="space-y-8">
+      {completion.error && <p role="alert" className="text-sm font-semibold text-rose-ink">{completion.error}</p>}
       <div className="flex items-center justify-between gap-3">
         <button
           onClick={onBack}
@@ -198,17 +228,17 @@ export default function GoalDetail({ goal, onBack, onChanged, onEdit, onDelete }
               <h2 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
                 To do
               </h2>
-              <span className="text-xs font-bold text-slate-400">{bundle.open.length}</span>
+              <span className="text-xs font-bold text-slate-400">{openTasks.length}</span>
             </div>
-            {bundle.open.length === 0 ? (
+            {openTasks.length === 0 ? (
               <p className="py-6 text-sm font-semibold text-slate-400">
                 {total === 0
                   ? 'Nothing linked to this goal yet. Add the first step below.'
-                  : 'Nothing open. Every task here is finished.'}
+                  : 'Nothing open for you. Your work here is finished.'}
               </p>
             ) : (
               <div>
-                {bundle.open.map((t) => (
+                {openTasks.map((t) => (
                   <TodoRow
                     key={t.id}
                     todo={t}
@@ -217,6 +247,7 @@ export default function GoalDetail({ goal, onBack, onChanged, onEdit, onDelete }
                     showOwner={combined}
                     hideGoal
                     onEdit={setEditTodo}
+                    pending={completion.pendingIds.has(t.id)}
                   />
                 ))}
               </div>
@@ -266,9 +297,9 @@ export default function GoalDetail({ goal, onBack, onChanged, onEdit, onDelete }
               <h2 className="text-xs font-bold uppercase tracking-[0.18em] text-slate-400">
                 Done
               </h2>
-              <span className="text-xs font-bold text-slate-400">{bundle.done.length}</span>
+              <span className="text-xs font-bold text-slate-400">{finishedTasks.length}</span>
             </div>
-            {bundle.done.length === 0 ? (
+            {finishedTasks.length === 0 ? (
               <p className="py-6 text-sm font-semibold text-slate-400">
                 Nothing finished yet. The first one will show up here.
               </p>
@@ -289,6 +320,7 @@ export default function GoalDetail({ goal, onBack, onChanged, onEdit, onDelete }
                           showOwner={combined}
                           hideGoal
                           onEdit={setEditTodo}
+                          pending={completion.pendingIds.has(t.id)}
                         />
                       ))}
                     </div>
@@ -307,7 +339,7 @@ export default function GoalDetail({ goal, onBack, onChanged, onEdit, onDelete }
           setEditTodo(null)
         }}
         onCreated={() => {
-          load()
+          latestLoad.current()
           onChanged()
         }}
         goalId={goal.id}

@@ -6,15 +6,16 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 
-const DIR = path.join(os.tmpdir(), 'doneline-mcp-test')
-fs.rmSync(DIR, { recursive: true, force: true })
-fs.mkdirSync(DIR, { recursive: true })
+const DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'doneline-mcp-test-'))
+const servers = []
 
 function startServer() {
-  const p = spawn('node', [path.join(__dirname, '..', 'out', 'mcp', 'server.cjs')], {
-    env: { ...process.env, DONELINE_DIR: DIR },
-    stdio: ['pipe', 'pipe', 'pipe']
+  const p = spawn(process.execPath, [path.join(__dirname, '..', 'out', 'mcp', 'server.cjs')], {
+    env: { ...process.env, TZ: 'Europe/Paris', DONELINE_DIR: DIR, DONELINE_DB: path.join(DIR, 'doneline.db') },
+    stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true
   })
+  servers.push(p)
+  p.closed = new Promise((resolve) => p.once('close', resolve))
   let buf = ''
   const pending = new Map()
   p.stdout.on('data', (d) => {
@@ -24,23 +25,34 @@ function startServer() {
       const line = buf.slice(0, i); buf = buf.slice(i + 1)
       if (!line.trim()) continue
       let m; try { m = JSON.parse(line) } catch { continue }
-      if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
+      if (m.id && pending.has(m.id)) {
+        const request = pending.get(m.id)
+        clearTimeout(request.timer)
+        pending.delete(m.id)
+        request.resolve(m)
+      }
     }
   })
-  p.stderr.on('data', () => {})
+  let stderr = ''
+  p.stderr.on('data', (data) => { stderr += data })
+  p.on('close', () => {
+    for (const request of pending.values()) { clearTimeout(request.timer); request.reject(new Error(`MCP exited before responding: ${stderr}`)) }
+    pending.clear()
+  })
   let id = 0
   const call = (method, params) =>
-    new Promise((res) => {
+    new Promise((resolve, reject) => {
       const myId = ++id
-      pending.set(myId, res)
+      const timer = setTimeout(() => { pending.delete(myId); reject(new Error(`MCP timeout: ${method}; ${stderr}`)) }, 15000)
+      pending.set(myId, { resolve, reject, timer })
       p.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: myId, method, params }) + '\n')
-      setTimeout(() => { if (pending.has(myId)) { pending.delete(myId); res({ timeout: true }) } }, 15000)
     })
   return { p, call }
 }
 
 const tool = async (call, name, args) => {
   const r = await call('tools/call', { name, arguments: args || {} })
+  if (r.error || r.result?.isError) throw new Error(`Tool ${name} failed: ${JSON.stringify(r)}`)
   const t = r?.result?.content?.[0]?.text
   try { return JSON.parse(t) } catch { return { raw: t, err: r?.error } }
 }
@@ -60,24 +72,22 @@ const localDayStr = (d) => {
   // ---- boot once to seed the DB, read the profiles ----
   let s = startServer()
   await s.call('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 't', version: '1' } })
-  await new Promise((r) => setTimeout(r, 1500))
   const tools = (await s.call('tools/list', {}))?.result?.tools || []
   console.log(`\nTOOLS: ${tools.length}`)
   const names = tools.map((t) => t.name)
-  for (const want of ['update_goal','delete_goal','update_event','delete_event','get_note','set_note','list_note_days','list_recurring','delete_recurring','list_goal_todos','rename_person','shared_focus_streak'])
+  for (const want of ['update_goal','delete_goal','update_event','delete_event','get_note','set_note','list_note_days','list_recurring','delete_recurring','list_goal_todos','rename_person','shared_focus_streak','remove_items_in_range'])
     check(`tool present: ${want}`, names.includes(want))
 
   const people = await tool(s.call, 'list_people')
   console.log(`\nprofiles: ${people.map((p) => p.name + '=' + p.id.slice(0, 8)).join(', ')}`)
   const [first, second] = people
   s.p.kill()
-  await new Promise((r) => setTimeout(r, 400))
+  await s.p.closed
 
   // ---- set "This is me" to the SECOND profile, the case that was broken ----
   fs.writeFileSync(path.join(DIR, 'prefs.json'), JSON.stringify({ selfPersonId: second.id }))
   s = startServer()
   await s.call('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 't', version: '1' } })
-  await new Promise((r) => setTimeout(r, 1500))
 
   console.log('\n--- BUG 1: writes must go to the current profile, not the first one ---')
   const td = await tool(s.call, 'add_todo', { title: 'ownership probe' })
@@ -139,7 +149,33 @@ const localDayStr = (d) => {
   const del = await tool(s.call, 'delete_event', { id: evOwn.id })
   check('delete_event reports deletion', del.deleted === evOwn.id)
 
+  console.log('\n--- bounded Thursday repeats and reviewed range removal ---')
+  const bounded = await tool(s.call, 'add_event', { title: 'Bounded Thursday', starts_at: '2026-10-01T09:00', ends_at: '2026-10-01T10:00', repeat: 'weekly', repeat_days: [4], repeat_from: '2026-10-01', repeat_until: '2026-10-22' })
+  const occurrences = await tool(s.call, 'list_events', { from: '2026-09-01', to: '2026-12-01' })
+  check('repeat dates materialize only four bounded Thursdays', occurrences.filter(e => e.recur_parent === bounded.id).length === 4)
+  const preview = await tool(s.call, 'remove_items_in_range', { kind: 'events', from_day: '2026-10-08', to_day: '2026-10-15', title_contains: 'bounded thursday' })
+  check('range preview returns two inclusive matches', preview.events?.length === 2 && preview.expected_ids?.length === 2)
+  const removed = await tool(s.call, 'remove_items_in_range', { kind: 'events', from_day: '2026-10-08', to_day: '2026-10-15', title_contains: 'bounded thursday', preview: false, expected_ids: preview.expected_ids })
+  check('reviewed range removal deletes only matches', removed.removed?.events === 2)
+  const retained = await tool(s.call, 'list_events', { from: '2026-09-01', to: '2026-12-01' })
+  check('removed recurring occurrences do not regenerate', retained.filter(e => e.recur_parent === bounded.id).length === 2)
+  const remainingRule = await tool(s.call, 'list_recurring')
+  check('repeat rule continues outside removed range', remainingRule.events.some(e => e.id === bounded.id))
+  await tool(s.call, 'update_event', { id: bounded.id, repeat_until: '2026-10-29' })
+  const changedRule = (await tool(s.call, 'list_recurring')).events.find(e => e.id === bounded.id)
+  check('editing bounds preserves deleted dates', JSON.parse(changedRule.recurrence).excludedDates.includes('2026-10-08'))
+  const invalid = await s.call('tools/call', { name: 'add_todo', arguments: { title: 'Impossible day', due_at: '2026-02-30T09:00' } })
+  check('invalid calendar dates return a tool error', invalid.result?.isError === true)
+
   s.p.kill()
+  await s.p.closed
   console.log(`\n${pass} passed, ${fail} failed`)
-  process.exit(fail ? 1 : 0)
-})()
+  process.exitCode = fail ? 1 : 0
+})().catch((error) => { console.error(error); process.exitCode = 1 }).finally(async () => {
+  for (const server of servers) {
+    if (server.exitCode === null && server.signalCode === null) server.kill()
+    await server.closed
+  }
+  if (path.dirname(path.resolve(DIR)) !== path.resolve(os.tmpdir()) || !path.basename(DIR).startsWith('doneline-mcp-test-')) throw new Error('Unexpected test cleanup directory')
+  fs.rmSync(DIR, { recursive: true, force: true })
+})

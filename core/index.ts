@@ -8,8 +8,10 @@ export * from './todos.js'
 export * from './events.js'
 export * from './settings.js'
 export * from './caldav.js'
+export * from './calendarResources.js'
 export * from './reactions.js'
 export * from './notes.js'
+export * from './rangeRemoval.js'
 export {
   getSyncConfig,
   setSyncConfig,

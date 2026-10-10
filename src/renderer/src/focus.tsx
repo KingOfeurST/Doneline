@@ -11,6 +11,8 @@ import { api } from './api'
 import { CHANNELS, channelById } from './lib/sound'
 import { playChime, playTick, startRain, type RainHandle } from './lib/audioFx'
 import { MOODS } from './lib/moods'
+import { FocusClock } from './lib/focusClock'
+import { useProfile } from './profile'
 
 type Phase = 'focus' | 'break'
 
@@ -55,6 +57,7 @@ interface FocusCtx {
   volume: number
   setVolume: (v: number) => void
   audioError: boolean
+  recordError: string
 
   start: () => void
   pause: () => void
@@ -75,9 +78,9 @@ function loadPrefs() {
     return {
       focusMin: clampMin(Number(p.focusMin) || 25),
       breakMin: clampMin(Number(p.breakMin) || 5),
-      channelId: typeof p.channelId === 'string' ? p.channelId : CHANNELS[0].id,
-      mood: typeof p.mood === 'string' ? p.mood : MOODS[0].id,
-      volume: typeof p.volume === 'number' ? p.volume : 0.6
+      channelId: CHANNELS.some((c) => c.id === p.channelId) ? p.channelId as string : CHANNELS[0].id,
+      mood: MOODS.some((m) => m.id === p.mood) ? p.mood as string : MOODS[0].id,
+      volume: typeof p.volume === 'number' && Number.isFinite(p.volume) ? Math.min(1, Math.max(0, p.volume)) : 0.6
     }
   } catch {
     return { focusMin: 25, breakMin: 5, channelId: CHANNELS[0].id, mood: MOODS[0].id, volume: 0.6 }
@@ -85,11 +88,13 @@ function loadPrefs() {
 }
 
 function clampMin(m: number): number {
+  if (!Number.isFinite(m)) return 25
   return Math.min(180, Math.max(1, Math.round(m)))
 }
 
 export function FocusProvider({ children }: { children: ReactNode }) {
-  const prefs = useRef(loadPrefs()).current
+  const { self } = useProfile()
+  const [prefs] = useState(loadPrefs)
 
   const [open, setOpen] = useState(false)
   const [started, setStarted] = useState(false)
@@ -102,6 +107,8 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   const [breakMin, setBreakMinState] = useState(prefs.breakMin)
   const [secondsLeft, setSecondsLeft] = useState(prefs.focusMin * 60)
   const [isRunning, setIsRunning] = useState(false)
+  const clock = useRef(new FocusClock(prefs.focusMin * 60)).current
+  const [totalSeconds, setTotalSeconds] = useState(clock.totalSeconds)
 
   const [taskId, setTaskId] = useState<string | null>(null)
   const [taskTitle, setTaskTitle] = useState<string | null>(null)
@@ -111,35 +118,34 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   const [playing, setPlaying] = useState(false)
   const [volume, setVolumeState] = useState(prefs.volume)
   const [audioError, setAudioError] = useState(false)
+  const [recordError, setRecordError] = useState('')
 
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const rainRef = useRef<RainHandle | null>(null)
-  const secondsLeftRef = useRef(secondsLeft)
-  secondsLeftRef.current = secondsLeft
   const phaseRef = useRef(phase)
   phaseRef.current = phase
-  const focusMinRef = useRef(focusMin)
-  focusMinRef.current = focusMin
   const taskIdRef = useRef(taskId)
   taskIdRef.current = taskId
-  const totalSeconds = (phase === 'focus' ? focusMin : breakMin) * 60
+  const blockOwner = useRef(self)
+  const lastIdentity = useRef(self)
 
   // Log a completed/ended focus block (counts only time actually focused).
   const recordFocusBlock = useCallback(() => {
     if (phaseRef.current !== 'focus') return
-    const duration = focusMinRef.current * 60 - secondsLeftRef.current
-    if (duration < 60) return
     const now = new Date()
+    const duration = clock.takeRecordableSeconds(now.getTime())
+    if (!duration) return
     api.focus
       .record({
+        personId: blockOwner.current || undefined,
         taskId: taskIdRef.current,
         durationSeconds: duration,
         startedAt: new Date(now.getTime() - duration * 1000).toISOString(),
         endedAt: now.toISOString()
       })
       .then(() => window.dispatchEvent(new Event('doneline:stats')))
-      .catch(() => {})
-  }, [])
+      .catch(() => setRecordError('Could not save your focus session.'))
+  }, [clock])
 
   // --- persistence ---
   useEffect(() => {
@@ -174,6 +180,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const a = audioRef.current
     if (!a) return
+    let cancelled = false
     rainRef.current?.stop()
     rainRef.current = null
 
@@ -192,10 +199,12 @@ export function FocusProvider({ children }: { children: ReactNode }) {
       a.src = ch.url ?? ''
       a.volume = volume
       a.play().catch(() => {
+        if (cancelled) return
         setAudioError(true)
         setPlaying(false)
       })
     }
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, channelId])
 
@@ -213,12 +222,14 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   // changes + a 20s heartbeat; the friend computes time-left locally from ends_at.
   useEffect(() => {
     const emit = () => {
-      const payload = started
+      const remaining = clock.advance(Date.now())
+      const ownsSession = !blockOwner.current || blockOwner.current === self
+      const payload = started && isRunning && !preparing && ownsSession
         ? {
             status: 'focusing' as const,
             phase,
             task_title: taskTitle,
-            ends_at: new Date(Date.now() + secondsLeftRef.current * 1000).toISOString()
+            ends_at: new Date(Date.now() + remaining * 1000).toISOString()
           }
         : { status: 'idle' as const }
       api.presence.update(payload).catch(() => {})
@@ -227,14 +238,16 @@ export function FocusProvider({ children }: { children: ReactNode }) {
     emit()
     const hb = setInterval(emit, 20_000)
     return () => clearInterval(hb)
-  }, [started, isRunning, phase, taskTitle])
+  }, [started, isRunning, preparing, phase, taskTitle, self, clock])
 
   // --- timer tick ---
   useEffect(() => {
     if (!isRunning) return
-    const id = window.setInterval(() => setSecondsLeft((s) => Math.max(0, s - 1)), 1000)
+    const tick = () => setSecondsLeft(clock.advance(Date.now()))
+    tick()
+    const id = window.setInterval(tick, 250)
     return () => window.clearInterval(id)
-  }, [isRunning])
+  }, [isRunning, clock])
 
   // --- phase transition at zero ---
   useEffect(() => {
@@ -243,15 +256,20 @@ export function FocusProvider({ children }: { children: ReactNode }) {
     if (next === 'break') recordFocusBlock() // a focus block just finished
     playChime(next)
     setPhase(next)
+    phaseRef.current = next
     if (next === 'focus') setRound((r) => r + 1) // each focus block is a new session
-    setSecondsLeft((next === 'focus' ? focusMin : breakMin) * 60)
-  }, [secondsLeft, isRunning, phase, focusMin, breakMin])
+    const seconds = (next === 'focus' ? focusMin : breakMin) * 60
+    clock.reset(seconds, true)
+    setSecondsLeft(seconds)
+    setTotalSeconds(seconds)
+  }, [secondsLeft, isRunning, phase, focusMin, breakMin, clock, recordFocusBlock])
 
   // --- pre-focus get-ready countdown (10 → 0, then start) ---
   useEffect(() => {
     if (!preparing) return
     if (countdown <= 0) {
       setPreparing(false)
+      clock.start(Date.now())
       setIsRunning(true)
       playChime('focus')
       return
@@ -261,10 +279,11 @@ export function FocusProvider({ children }: { children: ReactNode }) {
       setCountdown((c) => c - 1)
     }, 1000)
     return () => window.clearTimeout(id)
-  }, [preparing, countdown])
+  }, [preparing, countdown, clock])
 
   const start = useCallback(() => {
     if (!started) {
+      blockOwner.current = self
       // Fresh session: run a 10s get-ready countdown before the focus timer.
       setStarted(true)
       setRound(1)
@@ -272,33 +291,48 @@ export function FocusProvider({ children }: { children: ReactNode }) {
       setPreparing(true)
       setCountdown(10)
     } else {
+      if (preparing) return
+      clock.start(Date.now())
       setIsRunning(true) // resume after a pause
     }
-  }, [started, totalSeconds])
+  }, [started, totalSeconds, preparing, clock, self])
 
-  const pause = useCallback(() => setIsRunning(false), [])
+  const pause = useCallback(() => {
+    setPreparing(false)
+    setCountdown(0)
+    setSecondsLeft(clock.pause(Date.now()))
+    setIsRunning(false)
+  }, [clock])
 
   // Start (or join) a session anchored to a shared timestamp so both friends are
   // in sync regardless of who detects it first. Skips the get-ready countdown.
   const startAnchored = useCallback((startedAtISO: string, fMin: number, bMin: number) => {
+    const f = clampMin(fMin)
+    const b = clampMin(bMin)
     const raw = Math.floor((Date.now() - new Date(startedAtISO).getTime()) / 1000)
     // Guard against clock skew / stale anchors: if elapsed is negative or beyond
     // the focus length, just start a full focus block.
-    const elapsed = raw < 0 || raw > fMin * 60 ? 0 : raw
-    setFocusMinState(fMin)
-    setBreakMinState(bMin)
+    const elapsed = !Number.isFinite(raw) || raw < 0 || raw >= f * 60 ? 0 : raw
+    blockOwner.current = self
+    setFocusMinState(f)
+    setBreakMinState(b)
     setPhase('focus')
     setRound(1)
-    setSecondsLeft(Math.max(1, fMin * 60 - elapsed))
+    phaseRef.current = 'focus'
+    clock.reset(Math.max(1, f * 60 - elapsed), true)
+    setSecondsLeft(clock.secondsLeft)
+    setTotalSeconds(f * 60)
     setPreparing(false)
     setCountdown(0)
     setWaiting(false)
     setStarted(true)
     setOpen(true)
     setIsRunning(true)
-  }, [])
+  }, [clock, self])
 
   const reset = useCallback(() => {
+    blockOwner.current = self
+    setRecordError('')
     setIsRunning(false)
     setStarted(false)
     setPreparing(false)
@@ -306,44 +340,80 @@ export function FocusProvider({ children }: { children: ReactNode }) {
     setWaiting(false)
     setRound(0)
     setPhase('focus')
+    phaseRef.current = 'focus'
+    clock.reset(focusMin * 60)
     setSecondsLeft(focusMin * 60)
+    setTotalSeconds(focusMin * 60)
     setPlaying(false) // stop the music when the session ends
-  }, [focusMin])
+  }, [focusMin, clock, self])
+
+  useEffect(() => {
+    const previous = lastIdentity.current
+    lastIdentity.current = self
+    if (!previous) {
+      if (!blockOwner.current) blockOwner.current = self
+      return
+    }
+    if (previous !== self && started) {
+      // Record the old owner's work before resetting. Presence already suppresses
+      // this block for the newly selected identity.
+      recordFocusBlock()
+      reset()
+    }
+  }, [self, started, recordFocusBlock, reset])
 
   const stopMusic = useCallback(() => setPlaying(false), [])
 
   const skip = useCallback(() => {
-    const next: Phase = phase === 'focus' ? 'break' : 'focus'
+    if (preparing) return
+    const next: Phase = phaseRef.current === 'focus' ? 'break' : 'focus'
     if (next === 'break') recordFocusBlock()
     setPhase(next)
-    setSecondsLeft((next === 'focus' ? focusMin : breakMin) * 60)
-  }, [phase, focusMin, breakMin, recordFocusBlock])
+    phaseRef.current = next
+    if (next === 'focus') setRound((r) => r + 1)
+    const seconds = (next === 'focus' ? focusMin : breakMin) * 60
+    clock.reset(seconds, isRunning)
+    setSecondsLeft(seconds)
+    setTotalSeconds(seconds)
+  }, [focusMin, breakMin, preparing, isRunning, recordFocusBlock, clock])
 
   const addMinutes = useCallback((m: number) => {
-    setSecondsLeft((s) => Math.max(0, s + m * 60))
-  }, [])
+    if (!Number.isFinite(m)) return
+    setSecondsLeft(clock.extend(m * 60, Date.now()))
+    setTotalSeconds(clock.totalSeconds)
+  }, [clock])
 
   const setFocusMin = useCallback(
     (m: number) => {
       const v = clampMin(m)
       setFocusMinState(v)
-      if (!isRunning && phase === 'focus') setSecondsLeft(v * 60)
+      if (!started && phase === 'focus') {
+        clock.reset(v * 60)
+        setSecondsLeft(v * 60)
+        setTotalSeconds(v * 60)
+      }
     },
-    [isRunning, phase]
+    [started, phase, clock]
   )
 
   const setBreakMin = useCallback(
     (m: number) => {
       const v = clampMin(m)
       setBreakMinState(v)
-      if (!isRunning && phase === 'break') setSecondsLeft(v * 60)
+      if (!started && phase === 'break') {
+        clock.reset(v * 60)
+        setSecondsLeft(v * 60)
+        setTotalSeconds(v * 60)
+      }
     },
-    [isRunning, phase]
+    [started, phase, clock]
   )
 
   const setChannel = useCallback((id: string) => setChannelId(id), [])
   const togglePlay = useCallback(() => setPlaying((p) => !p), [])
-  const setVolume = useCallback((v: number) => setVolumeState(v), [])
+  const setVolume = useCallback((v: number) => {
+    if (Number.isFinite(v)) setVolumeState(Math.min(1, Math.max(0, v)))
+  }, [])
 
   return (
     <Ctx.Provider
@@ -377,6 +447,7 @@ export function FocusProvider({ children }: { children: ReactNode }) {
         volume,
         setVolume,
         audioError,
+        recordError,
         start,
         pause,
         reset,

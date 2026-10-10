@@ -1,22 +1,16 @@
 import { app, BrowserWindow, Menu, Tray, nativeImage, shell, ipcMain } from 'electron'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import electronUpdater from 'electron-updater'
 import { CH, EVT } from '../shared/channels.js'
+import { UpdateController, detectMacAutoInstall } from './updates.js'
 
 const { autoUpdater } = electronUpdater
 
-type UpdateState = 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error'
-function sendUpdateStatus(state: UpdateState, extra: Record<string, unknown> = {}): void {
-  mainWindow?.webContents.send(EVT.updateStatus, { state, ...extra })
-}
-
-function setupAutoUpdate(): void {
-  autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'))
-  autoUpdater.on('update-available', (i) => sendUpdateStatus('available', { version: i.version }))
-  autoUpdater.on('update-not-available', () => sendUpdateStatus('not-available'))
-  autoUpdater.on('download-progress', (p) => sendUpdateStatus('downloading', { percent: Math.round(p.percent) }))
-  autoUpdater.on('update-downloaded', (i) => sendUpdateStatus('downloaded', { version: i.version }))
-  autoUpdater.on('error', (e) => sendUpdateStatus('error', { message: String(e?.message ?? e) }))
+// An explicit override keeps fixture Chromium data separate from an installed profile.
+if (process.env.DONELINE_USER_DATA_DIR) {
+  const userData = resolve(process.env.DONELINE_USER_DATA_DIR)
+  app.setPath('userData', userData)
+  app.setPath('sessionData', userData)
 }
 
 // The app and the MCP server share one DB. Both default to ~/.doneline (see
@@ -33,7 +27,9 @@ import {
   syncCalendar,
   getCalDavConfig,
   listPeople,
-  runMaintenance
+  runMaintenance,
+  localDay,
+  queueCalendarSync
 } from '../../core/index.js'
 
 let mainWindow: BrowserWindow | null = null
@@ -41,6 +37,7 @@ let tray: Tray | null = null
 let isQuitting = false
 let syncTimer: NodeJS.Timeout | null = null
 let maintenanceTimer: NodeJS.Timeout | null = null
+let updates: UpdateController | null = null
 
 function showWindow(): void {
   if (!mainWindow) {
@@ -146,7 +143,7 @@ function createWindow(): void {
     backgroundColor: '#d6ecf7',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false
     }
@@ -165,8 +162,19 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url)
+    try {
+      const protocol = new URL(url).protocol
+      if (protocol === 'https:' || protocol === 'http:') void shell.openExternal(url).catch((error) => console.error('[doneline] open link failed:', error))
+    } catch { /* Invalid URLs are never sent to the operating system. */ }
     return { action: 'deny' }
+  })
+  // External pages must never receive the privileged preload API.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const trusted = process.env.ELECTRON_RENDERER_URL
+    try {
+      if (trusted && new URL(url).origin === new URL(trusted).origin) return
+    } catch { /* Block malformed navigation. */ }
+    event.preventDefault()
   })
 
   if (process.env.ELECTRON_RENDERER_URL) {
@@ -227,54 +235,66 @@ app.whenReady().then(async () => {
   startCloudSyncLoop()
   startNotifications(() => mainWindow)
 
-  // Re-run maintenance hourly (covers day rollovers while the app stays open).
+  // Check day rollovers promptly, including after the computer wakes from sleep.
+  let maintainedDay = localDay()
+  let lastCalendarPull = Date.now()
   maintenanceTimer = setInterval(() => {
     try {
-      runMaintenance()
-      mainWindow?.webContents.send('workspace:changed')
+      const today = localDay()
+      if (today !== maintainedDay) {
+        runMaintenance()
+        maintainedDay = today
+        void cloudSync().catch(() => {})
+        mainWindow?.webContents.send(EVT.workspaceChanged)
+      }
+      // Pending calendar changes are durable and get another try after outages.
+      queueCalendarSync(undefined, () => {
+        void cloudSync().catch(() => {})
+        mainWindow?.webContents.send(EVT.workspaceChanged)
+      })
+      if (Date.now() - lastCalendarPull >= 300_000) {
+        lastCalendarPull = Date.now()
+        for (const person of listPeople()) {
+          if (getCalDavConfig(person.id)) void syncCalendar(person.id)
+            .then(() => { void cloudSync().catch(() => {}); mainWindow?.webContents.send(EVT.workspaceChanged) })
+            .catch((err) => console.error('[doneline] calendar sync failed:', err))
+        }
+      }
     } catch (err) {
       console.error('[doneline] maintenance failed:', err)
     }
-  }, 3_600_000)
+  }, 30_000)
 
   // Sync each person's Apple Calendar on launch (best effort).
   for (const person of listPeople()) {
     if (getCalDavConfig(person.id)) {
-      syncCalendar(person.id).catch((err) =>
+      syncCalendar(person.id).then(() => {
+        void cloudSync().catch(() => {})
+        mainWindow?.webContents.send(EVT.workspaceChanged)
+      }).catch((err) =>
         console.error(`[doneline] startup calendar sync failed for ${person.name}:`, err)
       )
     }
   }
 
-  // Auto-update from GitHub Releases (packaged builds only). Notifies and
-  // installs on quit when a newer version is published.
-  setupAutoUpdate()
-  if (app.isPackaged) {
-    autoUpdater.checkForUpdatesAndNotify().catch((err) =>
-      console.error('[doneline] update check failed:', err)
-    )
-  }
+  updates = new UpdateController({
+    updater: autoUpdater,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    detectMacAutoInstall: () => detectMacAutoInstall(process.execPath),
+    openExternal: (url) => shell.openExternal(url),
+    emit: (status) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(EVT.updateStatus, status)
+    },
+    setQuitting: (quitting) => { isQuitting = quitting }
+  })
 
   ipcMain.handle(CH.appVersion, () => app.getVersion())
   ipcMain.handle(CH.appPlatform, () => process.platform)
-  ipcMain.handle(CH.updateCheck, async () => {
-    if (!app.isPackaged) return { state: 'dev' as const }
-    try {
-      await autoUpdater.checkForUpdates()
-      return { state: 'checking' as const }
-    } catch (err) {
-      return { state: 'error' as const, message: String(err) }
-    }
-  })
-  ipcMain.handle(CH.updateInstall, () => {
-    if (process.platform === 'darwin') {
-      // macOS requires code signing for auto-install — open the releases page instead.
-      shell.openExternal('https://github.com/KingOfeurST/Doneline/releases/latest')
-      return
-    }
-    isQuitting = true
-    autoUpdater.quitAndInstall()
-  })
+  ipcMain.handle(CH.updateStatus, () => updates!.status())
+  ipcMain.handle(CH.updateCheck, () => updates!.check())
+  ipcMain.handle(CH.updateInstall, () => updates!.install())
+  void updates.start().catch((error) => console.error('[doneline] updater setup failed:', error))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -291,6 +311,7 @@ app.on('before-quit', () => {
   isQuitting = true
   if (syncTimer) clearInterval(syncTimer)
   if (maintenanceTimer) clearInterval(maintenanceTimer)
+  updates?.dispose()
   stopNotifications()
   closeDb()
   tray?.destroy()

@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { useProfile } from '../profile'
 import type { Person } from '../../../shared/api'
+import { KeyedSerialQueue } from '../lib/serialQueue'
 
 const SAVE_DEBOUNCE_MS = 800
+const writes = new KeyedSerialQueue()
 
 interface Props {
   day: string
@@ -21,82 +23,131 @@ interface Props {
  * a debounce so it never fights the typing cursor, and refreshes when a
  * background sync brings in the other person's edits.
  */
-export default function DailyNote({ day, personId, owner, compact = false }: Props) {
+export default function DailyNote(props: Props) {
+  // A new editor owns each note, so late responses from another day or person
+  // cannot replace the note currently being written.
+  return <NoteEditor key={`${props.day}:${props.personId}`} {...props} />
+}
+
+function NoteEditor({ day, personId, owner, compact = false }: Props) {
   const { tick } = useProfile()
   const [body, setBody] = useState('')
   const [saved, setSaved] = useState(false)
   const [dirty, setDirty] = useState(false)
-  const loadedFor = useRef<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [error, setError] = useState('')
+  const mounted = useRef(true)
+  const revision = useRef(0)
+  const requestId = useRef(0)
+  const writing = useRef(new Set<number>())
+  const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const areaRef = useRef<HTMLTextAreaElement>(null)
   // Latest unsaved text (and who/when it belongs to) so the flush on unmount
   // writes the right thing even after the day or profile has changed.
-  const pending = useRef<{ day: string; personId: string; body: string } | null>(null)
+  const pending = useRef<{ body: string; revision: number } | null>(null)
+  const draftKey = `doneline.noteDraft:${day}:${personId}`
 
   /** Write immediately and drop the pending debounce. */
-  function flush() {
+  const flush = useCallback(() => {
     if (timer.current) {
       clearTimeout(timer.current)
       timer.current = null
     }
     const p = pending.current
-    if (!p) return
-    pending.current = null
-    api.notes.set(p.day, p.body, p.personId).catch(() => {})
-  }
+    if (!p || writing.current.has(p.revision)) return
+    writing.current.add(p.revision)
+    // Serialize writes to this note so an earlier slow save cannot arrive last.
+    writes.run(draftKey, () => api.notes.set(day, p.body, personId))
+      .then(() => {
+        if (pending.current?.revision !== p.revision) return
+        pending.current = null
+        try {
+          if (localStorage.getItem(draftKey) === p.body) localStorage.removeItem(draftKey)
+        } catch {}
+        if (!mounted.current) return
+        setDirty(false)
+        setError('')
+        setSaved(true)
+        if (savedTimer.current) clearTimeout(savedTimer.current)
+        savedTimer.current = setTimeout(() => setSaved(false), 1600)
+      })
+      .catch(() => {
+        if (mounted.current && pending.current?.revision === p.revision) {
+          setError('Could not save. Your draft is kept on this device.')
+          setSaved(false)
+        }
+      })
+      .finally(() => writing.current.delete(p.revision))
+  }, [day, personId, draftKey])
 
   // Load when the day or the selected person changes. Flush first so text typed
   // just before the switch is saved against the note it was written for.
-  const key = `${day}:${personId}`
   useEffect(() => {
-    if (!day || !personId || loadedFor.current === key) return
-    flush()
-    loadedFor.current = key
-    api.notes.get(day, personId).then((n) => setBody(n.body))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key])
+    if (!day || !personId) return
+    let cancelled = false
+    const request = ++requestId.current
+    writes.wait(draftKey).then(() => api.notes.get(day, personId)).then((n) => {
+      if (cancelled || request !== requestId.current) return
+      let draft: string | null = null
+      try { draft = localStorage.getItem(draftKey) } catch {}
+      setBody(draft ?? n.body)
+      if (draft !== null) {
+        pending.current = { body: draft, revision: ++revision.current }
+        setDirty(true)
+        flush()
+      }
+    }).catch(() => {
+      if (!cancelled) {
+        setLoadFailed(true)
+        setError('Could not load this note. Please reopen it to try again.')
+      }
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [day, personId, draftKey, flush])
 
   // A background sync may carry the other person's edits. Only pull them in when
   // this note has nothing unsaved and isn't being typed in, so a refresh can
   // never stomp the cursor or discard local text.
   useEffect(() => {
     if (!day || !personId || tick === 0) return
-    if (pending.current || dirty) return
+    if (pending.current || writing.current.size > 0 || loading) return
     if (document.activeElement === areaRef.current) return
-    api.notes.get(day, personId).then((n) => setBody((cur) => (n.body === cur ? cur : n.body)))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tick])
+    const request = ++requestId.current
+    const currentRevision = revision.current
+    api.notes.get(day, personId).then((n) => {
+      if (!mounted.current || request !== requestId.current || currentRevision !== revision.current || pending.current) return
+      setBody((cur) => n.body === cur ? cur : n.body)
+    }).catch(() => {})
+  }, [tick, day, personId, loading])
 
   // Save on unmount (tab switch) and on window close — a debounce that is merely
   // cancelled would silently discard the last keystrokes.
   useEffect(() => {
+    mounted.current = true
     window.addEventListener('beforeunload', flush)
     return () => {
+      mounted.current = false
       window.removeEventListener('beforeunload', flush)
       flush()
+      if (savedTimer.current) clearTimeout(savedTimer.current)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [flush])
 
   function edit(next: string) {
     setBody(next)
     setSaved(false)
+    setError('')
     setDirty(true)
-    pending.current = { day, personId, body: next }
+    pending.current = { body: next, revision: ++revision.current }
+    // Preserve the final keystrokes if the window closes before IPC finishes.
+    try { localStorage.setItem(draftKey, next) } catch {}
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
-      timer.current = null
-      const p = pending.current
-      if (!p) return
-      pending.current = null
-      api.notes
-        .set(p.day, p.body, p.personId)
-        .then(() => {
-          setDirty(false)
-          setSaved(true)
-          setTimeout(() => setSaved(false), 1600)
-        })
-        .catch(() => {})
+      flush()
     }, SAVE_DEBOUNCE_MS)
   }
 
@@ -126,13 +177,15 @@ export default function DailyNote({ day, personId, owner, compact = false }: Pro
           </h2>
         </div>
         <span className="shrink-0 text-xs font-bold text-amber-700/60">
-          {saved ? 'Saved' : dirty ? 'Saving…' : words > 0 ? `${words} word${words === 1 ? '' : 's'}` : ''}
+          {loading ? 'Loading…' : error ? 'Not saved' : saved ? 'Saved' : dirty ? 'Saving…' : words > 0 ? `${words} word${words === 1 ? '' : 's'}` : ''}
         </span>
       </div>
 
       <textarea
         ref={areaRef}
         value={body}
+        disabled={loading || loadFailed}
+        aria-label={owner ? `${owner.name}'s note` : 'Daily note'}
         onChange={(e) => edit(e.target.value)}
         placeholder={'Brain dump, plans, how today went…'}
         spellCheck={false}
@@ -143,6 +196,10 @@ export default function DailyNote({ day, personId, owner, compact = false }: Pro
           backgroundAttachment: 'local'
         }}
       />
+      {error && <div role="alert" className="px-5 pb-4 text-xs font-semibold text-rose-ink">
+        {error}
+        {pending.current && <button onClick={flush} className="ml-2 underline">Retry save</button>}
+      </div>}
     </section>
   )
 }

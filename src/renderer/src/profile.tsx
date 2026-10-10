@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { api } from './api'
 import type { Person } from '../../shared/api'
 
@@ -32,24 +32,47 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
   )
   const [tick, setTick] = useState(0)
   const [self, setSelf] = useState('')
+  const loadedPeople = useRef(false)
+  const requestId = useRef(0)
+  const identityRequest = useRef(0)
 
   const reloadPeople = useCallback(async () => {
-    setPeople(await api.people.list())
+    const request = ++requestId.current
+    const list = await api.people.list()
+    if (request !== requestId.current) return
+    loadedPeople.current = true
+    setPeople(list)
+  }, [])
+  const reloadSelf = useCallback(async () => {
+    const request = ++identityRequest.current
+    try {
+      const id = await api.presence.getSelf()
+      if (request === identityRequest.current) setSelf(id)
+    } catch {
+      if (request === identityRequest.current) setSelf('')
+    }
   }, [])
 
   useEffect(() => {
-    reloadPeople()
-    api.presence.getSelf().then(setSelf)
-  }, [reloadPeople])
+    void reloadPeople().catch(() => {})
+    void reloadSelf()
+    window.addEventListener('doneline:identity', reloadSelf)
+    return () => {
+      window.removeEventListener('doneline:identity', reloadSelf)
+      requestId.current++
+      identityRequest.current++
+    }
+  }, [reloadPeople, reloadSelf])
 
   // A background cloud sync may have brought in new data — refresh everything.
   useEffect(() => {
     const off = api.workspace.onChanged(() => {
-      reloadPeople()
+      void reloadPeople().catch(() => {})
+      void reloadSelf()
       setTick((t) => t + 1)
     })
     return off
-  }, [reloadPeople])
+  }, [reloadPeople, reloadSelf])
 
   const setActive = useCallback((id: string) => {
     setActiveState(id)
@@ -58,13 +81,13 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
 
   // If the active person was deleted, fall back to the combined view.
   useEffect(() => {
-    if (active !== 'all' && people.length && !people.some((p) => p.id === active)) {
+    if (active !== 'all' && loadedPeople.current && !people.some((p) => p.id === active)) {
       setActive('all')
     }
   }, [people, active, setActive])
 
   const queryPersonId = active === 'all' ? undefined : active
-  const defaultOwnerId = active === 'all' ? people[0]?.id : active
+  const defaultOwnerId = active === 'all' ? self || people[0]?.id : active
   const personById = (id: string | null | undefined) => people.find((p) => p.id === id)
 
   return (

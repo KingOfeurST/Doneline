@@ -24,7 +24,8 @@ const notifiedNudges = new Set<string>()
 let morningSentDay = ''
 let appStart = Date.now()
 
-function show(title: string, body: string): void {
+function show(title: string, body: string, force = false): void {
+  if (!force && !getNotifPrefs().enabled) return
   if (!Notification.isSupported()) return
   const n = new Notification({ title, body, silent: false })
   n.on('click', () => {
@@ -128,7 +129,7 @@ export function stopNotifications(): void {
 }
 
 export function testNotification(): void {
-  show('Doneline', 'Notifications are working 🎉')
+  show('Doneline', 'Notifications are working 🎉', true)
 }
 
 /**

@@ -18,34 +18,40 @@ export default function FocusStatsCard() {
   const [sharedStreak, setSharedStreak] = useState(0)
 
   useEffect(() => {
+    let cancelled = false
+    let requestId = 0
     const load = async () => {
-      const s = await api.focus.stats()
-      setMyStats(s)
-
-      if (people.length > 1) {
-        const results = await Promise.all(
-          people.map(async (p) => ({
-            personId: p.id,
-            name: p.name,
-            emoji: p.emoji,
-            color: p.color,
-            stats: await api.focus.stats(p.id)
-          }))
-        )
+      const request = ++requestId
+      try {
+        const [s, results, ss] = await Promise.all([
+          api.focus.stats(),
+          people.length > 1 ? Promise.all(
+            people.map(async (p) => ({
+              personId: p.id,
+              name: p.name,
+              emoji: p.emoji,
+              color: p.color,
+              stats: await api.focus.stats(p.id)
+            }))
+          ) : Promise.resolve([]),
+          people.length > 1 ? api.focus.sharedStreak(people.map((p) => p.id)) : Promise.resolve(0)
+        ])
+        if (cancelled || request !== requestId) return
+        setMyStats(s)
         setAllStats(results)
-        const ss = await api.focus.sharedStreak(people.map((p) => p.id))
         setSharedStreak(ss)
-      }
+      } catch {}
     }
     load()
     window.addEventListener('doneline:stats', load)
-    return () => window.removeEventListener('doneline:stats', load)
-  }, [tick, people])
+    return () => { cancelled = true; window.removeEventListener('doneline:stats', load) }
+  }, [tick, people, self])
 
   if (!myStats) return null
-  if (myStats.streak === 0 && myStats.todaySessions === 0 && myStats.weekMinutes === 0) return null
+  if (myStats.streak === 0 && myStats.todaySessions === 0 && myStats.weekMinutes === 0 &&
+      !allStats.some((s) => s.stats.weekSessions > 0)) return null
 
-  const pct = Math.min(100, Math.round((myStats.todaySessions / myStats.target) * 100))
+  const pct = Math.min(100, Math.round((myStats.todaySessions / Math.max(1, myStats.target)) * 100))
   const showFaceoff = allStats.length > 1
   const maxWeekSessions = showFaceoff ? Math.max(...allStats.map((s) => s.stats.weekSessions), 1) : 1
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { TodoWithGoal } from '../../../shared/api'
 import type { FocusInvite, FocusStats } from '../../../shared/api'
@@ -9,22 +9,29 @@ import { CHANNELS } from '../lib/sound'
 import { MOODS, moodById } from '../lib/moods'
 import { randomQuote, type Quote } from '../lib/quotes'
 import FocusCanvas from './FocusCanvas'
+import { isTodoDoneForSelf } from '../lib/todoCompletion'
 
 const FOCUS_PRESETS = [15, 25, 45, 60]
 
 export default function FocusOverlay() {
   const f = useFocus()
-  const { queryPersonId, tick } = useProfile()
+  const { queryPersonId, tick, self } = useProfile()
   const [todos, setTodos] = useState<TodoWithGoal[]>([])
   const [endQuote, setEndQuote] = useState<Quote | null>(null)
+  const loadId = useRef(0)
 
   const loadTodos = useCallback(async () => {
     if (!f.open) return
-    setTodos(await api.todos.list({ includeCompleted: false, personId: queryPersonId }))
-  }, [f.open, queryPersonId, tick])
+    const request = ++loadId.current
+    try {
+      const loaded = await api.todos.list({ includeCompleted: false, personId: queryPersonId })
+      if (request === loadId.current) setTodos(loaded.filter((todo) => !isTodoDoneForSelf(todo, self)))
+    } catch {}
+  }, [f.open, queryPersonId, tick, self])
 
   useEffect(() => {
     loadTodos()
+    return () => { loadId.current++ }
   }, [loadTodos])
 
   if (!f.open) return null
@@ -76,32 +83,60 @@ function Setup({ todos }: { todos: TodoWithGoal[] }) {
   const { self, personById } = useProfile()
   const [invited, setInvited] = useState(false)
   const [activeInvite, setActiveInvite] = useState<FocusInvite | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const busyRef = useRef(false)
 
   useEffect(() => {
-    const check = () => api.presence.activeInvite().then(setActiveInvite)
+    let cancelled = false
+    let requestId = 0
+    const check = async () => {
+      const request = ++requestId
+      try {
+        const invite = await api.presence.activeInvite()
+        if (!cancelled && request === requestId) setActiveInvite(invite)
+      } catch {}
+    }
     check()
     const off = api.workspace.onChanged(check)
     const poll = setInterval(check, 5000)
     return () => {
       off()
+      cancelled = true
       clearInterval(poll)
     }
-  }, [])
+  }, [self])
 
   const hostedAccepted =
     !!activeInvite && activeInvite.from_person === self && activeInvite.accepted === 1 && !activeInvite.started_at
   const friendName = activeInvite ? personById(activeInvite.to_person)?.name ?? 'Your friend' : ''
 
   async function inviteFriend(toId: string) {
-    await api.presence.invite(toId, f.focusMin, f.breakMin)
-    setInvited(true)
-    setTimeout(() => setInvited(false), 2500)
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    setError('')
+    try {
+      await api.presence.invite(toId, f.focusMin, f.breakMin)
+      setInvited(true)
+      setTimeout(() => setInvited(false), 2500)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not send your invitation. Please try again.')
+    } finally { busyRef.current = false; setBusy(false) }
   }
 
   async function startTogether() {
     if (!activeInvite) return f.start()
-    const startedAt = await api.presence.startInvite(activeInvite.id)
-    f.startAnchored(startedAt, activeInvite.focus_min, activeInvite.break_min)
+    if (busyRef.current) return
+    busyRef.current = true
+    setBusy(true)
+    setError('')
+    try {
+      const startedAt = await api.presence.startInvite(activeInvite.id)
+      f.startAnchored(startedAt, activeInvite.focus_min, activeInvite.break_min)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not start this session. Please try again.')
+    } finally { busyRef.current = false; setBusy(false) }
   }
 
   return (
@@ -238,7 +273,7 @@ function Setup({ todos }: { todos: TodoWithGoal[] }) {
             <p className="rounded-2xl bg-mint-card px-4 py-2 text-center text-sm font-bold text-mint-ink">
               🎉 {friendName} joined — start when you're ready
             </p>
-            <button className="btn-primary w-full py-4 text-lg" onClick={startTogether}>
+            <button className="btn-primary w-full py-4 text-lg" onClick={startTogether} disabled={busy}>
               Start together · {f.focusMin} min
             </button>
           </>
@@ -251,7 +286,7 @@ function Setup({ todos }: { todos: TodoWithGoal[] }) {
               <button
                 className="btn-soft w-full"
                 onClick={() => inviteFriend(friends[0].person.id)}
-                disabled={invited}
+                disabled={invited || busy}
               >
                 {invited
                   ? 'Invite sent — waiting for them to join…'
@@ -260,6 +295,7 @@ function Setup({ todos }: { todos: TodoWithGoal[] }) {
             )}
           </>
         )}
+        {error && <p role="alert" className="mt-3 text-sm font-semibold text-rose-ink">{error}</p>}
       </div>
 
       <div className="h-8 shrink-0" />
@@ -306,14 +342,30 @@ function Ambient({
   const { friends } = usePresence()
   const focusingFriends = friends.filter((fr) => fr.status === 'focusing')
   const task = todos.find((t) => t.id === f.taskId) || null
+  const [taskError, setTaskError] = useState('')
+  const taskBusy = useRef(false)
   const mood = moodById(f.mood)
 
   async function markDone() {
-    if (!f.taskId) return
-    await api.todos.toggle(f.taskId, true)
+    if (!f.taskId || taskBusy.current) return
+    const taskId = f.taskId
+    const taskTitle = f.taskTitle
+    taskBusy.current = true
+    setTaskError('')
     f.setTaskId(null)
     f.setTaskTitle(null)
-    reload()
+    try {
+      const updated = await api.todos.toggle(taskId, true)
+      if (!updated) throw new Error('This todo no longer exists.')
+      window.dispatchEvent(new Event('doneline:todos'))
+      reload()
+    } catch {
+      f.setTaskId(taskId)
+      f.setTaskTitle(taskTitle)
+      setTaskError('Could not mark this todo done. Please try again.')
+    } finally {
+      taskBusy.current = false
+    }
   }
 
   return (
@@ -382,8 +434,8 @@ function Ambient({
 
         {/* controls */}
         <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-          <button onClick={f.isRunning ? f.pause : f.start} className="rounded-2xl bg-white px-6 py-3 font-bold text-ink shadow-clay transition hover:brightness-105">
-            {f.isRunning ? 'Pause' : 'Resume'}
+          <button onClick={f.isRunning ? f.pause : f.start} disabled={f.preparing} className="rounded-2xl bg-white px-6 py-3 font-bold text-ink shadow-clay transition hover:brightness-105">
+            {f.preparing ? 'Get ready…' : f.isRunning ? 'Pause' : 'Resume'}
           </button>
           <GlassBtn onClick={() => f.addMinutes(5)}>+5 min</GlassBtn>
           <GlassBtn onClick={f.skip}>Skip</GlassBtn>
@@ -419,6 +471,7 @@ function Ambient({
             Couldn't reach the music stream — the timer keeps running.
           </p>
         )}
+        {(taskError || f.recordError) && <p role="alert" className="mt-4 rounded-2xl bg-black/30 px-4 py-2 text-sm font-bold text-white/90">{taskError || f.recordError}</p>}
       </div>
     </div>
   )
@@ -432,7 +485,11 @@ function Ending({ quote, onClear }: { quote: Quote; onClear: () => void }) {
   const [stats, setStats] = useState<FocusStats | null>(null)
 
   useEffect(() => {
-    api.focus.stats().then(setStats)
+    let cancelled = false
+    const load = () => { void api.focus.stats().then((s) => { if (!cancelled) setStats(s) }).catch(() => {}) }
+    load()
+    window.addEventListener('doneline:stats', load)
+    return () => { cancelled = true; window.removeEventListener('doneline:stats', load) }
   }, [])
 
   function startAnother() {
@@ -449,6 +506,7 @@ function Ending({ quote, onClear }: { quote: Quote; onClear: () => void }) {
     <div className="fixed inset-0 z-[90] overflow-hidden" style={{ background: mood.base }}>
       <FocusCanvas moodId={f.mood} />
       <div className="relative z-10 flex h-full flex-col items-center justify-center px-8 text-center text-white">
+        {f.recordError && <p role="alert" className="mb-4 text-sm font-bold">{f.recordError}</p>}
         <p className="text-sm font-extrabold uppercase tracking-[0.3em] text-white/70">Session complete</p>
         <p className="mt-3 text-4xl">✨</p>
         <blockquote

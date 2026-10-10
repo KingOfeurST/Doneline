@@ -23,6 +23,11 @@ reading our todos.
 - **Calendar** holds our events: single days, multi-day trips, repeating stuff, and
   events we share so they show up for both of us. Click a day to see everything on
   it.
+  Repeats can use selected weekdays between two inclusive dates. **Repeating
+  events** edits a rule; editing a dated occurrence changes just that occurrence.
+  **Remove items** previews matching events and due todos between two dates before
+  deleting them. Removed occurrences stay removed while the rule continues on
+  the other dates.
 - **Profiles** let me flip between "me", "my friend", or **Both** at the top right,
   so I can peek at what's on her plate or see everything overlaid.
 - **Focus mode** is for actually doing the work: a calm full-screen timer with
@@ -39,11 +44,25 @@ to share, we connect a tiny free cloud database and our two apps stay in sync.
 
 ## Running it from source
 
-You only need Node 18+. There's no painful native build step.
+Use Node 22.12+ (Node 24 is recommended). There's no painful native build step.
 
 ```bash
 npm install     # grab the dependencies
 npm run dev     # open the app with live reload
+```
+
+Checking off a todo updates the list and remaining count immediately. If saving
+fails, the todo returns with an error message. Calendar changes save locally and
+retry their iCloud sync in the background.
+
+Validation uses isolated databases and mocked calendars; it never opens your
+normal data directory:
+
+```bash
+npm run typecheck
+npm test           # core regressions, real sandboxed IPC, Chromium renderer
+npm run test:mcp   # actual MCP protocol against a temporary database
+npm run build
 ```
 
 To make an installer you can actually hand to someone:
@@ -140,6 +159,7 @@ Restart Claude and it can use these:
 | `list_people` / `add_person` | Profiles |
 | `focus_stats` | My focus sessions, minutes, and streak |
 | `sync_calendar` | Sync with iCloud |
+| `remove_items_in_range` | Preview matching events/todos between inclusive dates, then delete only the reviewed IDs |
 | `run_maintenance` | Roll over recurring todos + tidy up finished ones |
 | `nudge_friend` | Poke my friend with a little notification |
 
@@ -163,15 +183,20 @@ mcp/server.ts    the server that lets Claude in
 
 I'm on Windows and a Mac `.dmg` can't be built on Windows, so GitHub builds both for
 us. Push the project to GitHub, then in the **Actions** tab run **Build installers**.
-It builds on a real Windows machine and a real Mac and publishes them as a release,
-which also means the app can **update itself** from then on (no more re-downloading
-every time I change something).
+It runs the regression suite, Electron UI/IPC tests, MCP checks and packaged-app
+startup on Windows x64, Intel Mac and Apple Silicon Mac. Only after all three pass
+does it publish a complete release, including checksummed updater metadata for
+both Mac architectures. Windows can download and install updates automatically.
+Mac requires macOS 14 or newer and uses a download link until Apple Developer
+signing is configured.
 
 > **Mac heads-up:** the app isn't signed with a paid Apple account yet, so the first
 > time my friend opens it, macOS calls it "damaged" or "unidentified". The fix is to
 > drag it to Applications and run this once in Terminal:
-> `xattr -cr /Applications/Doneline.app`. After that it opens normally and updates
-> itself quietly.
+> `xattr -cr /Applications/Doneline.app`. For updates, quit Doneline and replace it
+> in Applications using the DMG for your Mac (arm64 for M-series, x64 for Intel).
+> Removing quarantine does not enable automatic installation; that requires an
+> Apple Developer signature.
 
 ## What's next
 

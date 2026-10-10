@@ -20,10 +20,15 @@ export interface Goal {
   todo_done: number
 }
 
-/** Recurrence rule. `weekly` uses `days` (0=Sun … 6=Sat). */
+/** Local-calendar recurrence rule. `weekly` uses `days` (0=Sun … 6=Sat). */
 export interface Recurrence {
   freq: 'daily' | 'weekly'
   days?: number[]
+  /** Inclusive local calendar bounds, in YYYY-MM-DD format. */
+  startDate?: string
+  endDate?: string
+  /** Deleted occurrences stay deleted, including ones not generated yet. */
+  excludedDates?: string[]
 }
 
 export interface Todo {
@@ -65,6 +70,9 @@ export interface CalEvent {
   caldav_uid: string | null
   caldav_etag: string | null
   caldav_url: string | null
+  /** Remote recurrence identity; null for a single, non-repeating resource. */
+  caldav_recurrence_id: string | null
+  calendar_dirty: number
   recurrence: string | null // JSON Recurrence (template) or null
   recur_parent: string | null
   source: 'local' | 'caldav'

@@ -1,6 +1,7 @@
 import type { Reaction, TodoWithGoal } from '../../../shared/api'
 import { fmtTime } from '../lib/format'
 import { useProfile } from '../profile'
+import { isTodoDoneForSelf } from '../lib/todoCompletion'
 
 interface Props {
   todo: TodoWithGoal
@@ -17,6 +18,7 @@ interface Props {
   onDragStart?: () => void
   onDragEnter?: () => void
   onDragEnd?: () => void
+  pending?: boolean
 }
 
 const REACTION_EMOJIS = ['👏', '🔥']
@@ -33,16 +35,16 @@ export default function TodoRow({
   dragging,
   onDragStart,
   onDragEnter,
-  onDragEnd
+  onDragEnd,
+  pending = false
 }: Props) {
   const { people, self } = useProfile()
-  const done = todo.completed_at !== null
+  const done = isTodoDoneForSelf(todo, self)
   const pastDue = !done && !!todo.due_at && new Date(todo.due_at).getTime() < Date.now()
 
   const mutual = todo.goal_shared === 1
   const doneBy = (todo.done_by ?? '').split(',').filter(Boolean)
-  const selfDone = mutual ? doneBy.includes(self) : done
-  const checked = mutual ? selfDone : done
+  const checked = done
 
   // Count reactions by emoji
   const reactionCounts = REACTION_EMOJIS.map((emoji) => ({
@@ -54,20 +56,20 @@ export default function TodoRow({
   return (
     <div
       className={`group flex items-center gap-3 border-b border-slate-100 py-3 last:border-0 transition-opacity ${dragging ? 'opacity-30' : ''}`}
-      draggable
+      draggable={!!onDragStart && !pending}
       onDragStart={onDragStart}
       onDragEnter={(e) => { e.preventDefault(); onDragEnter?.() }}
       onDragOver={(e) => e.preventDefault()}
       onDragEnd={onDragEnd}
     >
       {/* Drag handle */}
-      <span className="hidden shrink-0 cursor-grab touch-none select-none text-slate-300 group-hover:flex items-center">
+      {onDragStart && <span className="hidden shrink-0 cursor-grab touch-none select-none text-slate-300 group-hover:flex items-center">
         <svg viewBox="0 0 12 20" className="h-4 w-3" fill="currentColor">
           <circle cx="3" cy="4" r="1.5" /><circle cx="9" cy="4" r="1.5" />
           <circle cx="3" cy="10" r="1.5" /><circle cx="9" cy="10" r="1.5" />
           <circle cx="3" cy="16" r="1.5" /><circle cx="9" cy="16" r="1.5" />
         </svg>
-      </span>
+      </span>}
 
       {showOwner && (
         <span
@@ -81,6 +83,9 @@ export default function TodoRow({
       <button
         onClick={() => onToggle(todo.id)}
         aria-label={checked ? 'Mark not done' : 'Mark done'}
+        aria-pressed={checked}
+        aria-busy={pending}
+        disabled={pending || (mutual && !self)}
         className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition ${
           checked ? 'border-mint-ink bg-mint-ink text-white' : 'border-slate-300 hover:border-mint-ink'
         }`}
@@ -96,6 +101,7 @@ export default function TodoRow({
         {onEdit ? (
           <button
             onClick={() => onEdit(todo)}
+            disabled={pending}
             title="Edit this todo"
             className={`block w-full truncate text-left font-bold underline-offset-4 hover:underline ${
               done ? 'text-slate-400 line-through' : pastDue ? 'text-rose-ink' : 'text-ink'
@@ -160,12 +166,13 @@ export default function TodoRow({
       )}
 
       <span className="w-16 shrink-0 text-right text-xs font-semibold text-slate-400">
-        {done ? fmtTime(todo.completed_at) : todo.due_at ? fmtTime(todo.due_at) : 'not yet'}
+        {done ? todo.completed_at ? fmtTime(todo.completed_at) : 'done by you' : todo.due_at ? fmtTime(todo.due_at) : 'not yet'}
       </span>
 
       <button
         onClick={() => onDelete(todo.id)}
         aria-label="Delete"
+        disabled={pending}
         className="shrink-0 rounded-full p-1.5 text-slate-300 opacity-0 transition hover:bg-rose-50 hover:text-rose-ink group-hover:opacity-100"
       >
         <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">

@@ -1,6 +1,8 @@
 import { v4 as uuid } from 'uuid'
 import { getDb } from './db.js'
 import { getDailyTarget } from './prefs.js'
+import { getPerson } from './people.js'
+import { timestamp } from './validation.js'
 import type { FocusSession, FocusStats } from './types.js'
 
 const MIN_SESSION_SECONDS = 60
@@ -13,13 +15,24 @@ export function recordFocusSession(input: {
   startedAt: string
   endedAt: string
 }): void {
+  if (!Number.isFinite(input.durationSeconds) || input.durationSeconds < 0 || input.durationSeconds > 180 * 60) {
+    throw new Error('Focus duration must be between zero and 180 minutes.')
+  }
   if (input.durationSeconds < MIN_SESSION_SECONDS) return
-  getDb()
+  if (!getPerson(input.personId)) throw new Error('Select an existing profile.')
+  const start = timestamp(input.startedAt, 'Focus start')
+  const end = timestamp(input.endedAt, 'Focus end')
+  const elapsed = (new Date(end).getTime() - new Date(start).getTime()) / 1000
+  if (elapsed <= 0 || input.durationSeconds > elapsed + 1) throw new Error('Focus duration cannot exceed the time between its start and end.')
+  const db = getDb()
+  // A task may be removed while its focus timer is running; keep the session.
+  const taskId = input.taskId && db.prepare('SELECT 1 FROM todos WHERE id = ?').get(input.taskId) ? input.taskId : null
+  db
     .prepare(
       `INSERT INTO focus_sessions (id, person_id, task_id, duration_seconds, started_at, ended_at)
        VALUES (?, ?, ?, ?, ?, ?)`
     )
-    .run(uuid(), input.personId, input.taskId ?? null, Math.round(input.durationSeconds), input.startedAt, input.endedAt)
+    .run(uuid(), input.personId, taskId, Math.round(input.durationSeconds), start, end)
 }
 
 function localDayKey(d: Date): string {
@@ -32,7 +45,7 @@ export function focusStats(personId: string): FocusStats {
   const target = getDailyTarget()
   const since = new Date(Date.now() - 90 * 86_400_000).toISOString()
   const rows = getDb()
-    .prepare('SELECT * FROM focus_sessions WHERE person_id = ? AND ended_at >= ? ORDER BY ended_at')
+    .prepare("SELECT * FROM focus_sessions WHERE person_id = ? AND julianday(ended_at) >= julianday(?) AND julianday(ended_at) <= julianday('now') ORDER BY ended_at")
     .all(personId, since) as FocusSession[]
 
   // Bucket sessions + minutes by local day.
@@ -86,12 +99,14 @@ export function focusStats(personId: string): FocusStats {
 
 /** Days both people have met target consecutively — the "together streak". */
 export function sharedFocusStreak(personIds: string[]): number {
+  personIds = [...new Set(personIds)]
   if (personIds.length < 2) return 0
+  if (personIds.some((id) => !getPerson(id))) return 0
   const target = getDailyTarget()
   const since = new Date(Date.now() - 90 * 86_400_000).toISOString()
   const ph = personIds.map(() => '?').join(',')
   const rows = getDb()
-    .prepare(`SELECT * FROM focus_sessions WHERE person_id IN (${ph}) AND ended_at >= ? ORDER BY ended_at`)
+    .prepare(`SELECT * FROM focus_sessions WHERE person_id IN (${ph}) AND julianday(ended_at) >= julianday(?) AND julianday(ended_at) <= julianday('now') ORDER BY ended_at`)
     .all(...personIds, since) as FocusSession[]
 
   const byPersonDay = new Map<string, Map<string, number>>()

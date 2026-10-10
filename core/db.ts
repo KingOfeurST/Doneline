@@ -13,6 +13,10 @@ type ReplicaOptions = Database.Options & { authToken?: string }
 
 let _db: DB | null = null
 let _cloud = false
+let _syncInFlight: Promise<boolean> | null = null
+let _initInFlight: Promise<void> | null = null
+let _initialized = false
+let _syncRequested = false
 
 /** Cloud mode uses a separate replica file so it never clashes with a plain
  *  local database created during offline use. */
@@ -138,6 +142,23 @@ CREATE INDEX IF NOT EXISTS idx_todos_goal ON todos(goal_id);
 CREATE INDEX IF NOT EXISTS idx_events_start ON events(starts_at);
 CREATE INDEX IF NOT EXISTS idx_reactions_todo ON reactions(todo_id);
 CREATE INDEX IF NOT EXISTS idx_nudges_to ON nudges(to_person, seen);
+
+CREATE TABLE IF NOT EXISTS calendar_tombstones (
+  person_id TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  recurrence_id TEXT NOT NULL DEFAULT '',
+  url TEXT,
+  etag TEXT,
+  PRIMARY KEY (person_id, uid, recurrence_id)
+);
+CREATE TABLE IF NOT EXISTS calendar_resources (
+  person_id TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  url TEXT,
+  etag TEXT,
+  ics TEXT NOT NULL,
+  PRIMARY KEY (person_id, uid)
+);
 `
 
 /** Add a column if it isn't already present (idempotent migration helper). */
@@ -170,6 +191,8 @@ function migrate(db: DB): void {
 
   // v3: events shared with everyone (show for both people).
   ensureColumn(db, 'events', 'shared', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'events', 'calendar_dirty', 'INTEGER NOT NULL DEFAULT 0')
+  ensureColumn(db, 'events', 'caldav_recurrence_id', 'TEXT')
 
   // v4: nudge kind — 'message' (text) or 'buzz' (window shake).
   ensureColumn(db, 'nudges', 'kind', "TEXT NOT NULL DEFAULT 'message'")
@@ -200,6 +223,26 @@ function migrate(db: DB): void {
   // so drop any old global-unique index and index by (person_id, uid) instead.
   db.exec('DROP INDEX IF EXISTS idx_events_uid')
   db.exec('CREATE INDEX IF NOT EXISTS idx_events_person_uid ON events(person_id, caldav_uid)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_events_recur_start ON events(recur_parent, starts_at)')
+  db.exec('CREATE INDEX IF NOT EXISTS idx_todos_recur_due ON todos(recur_parent, due_at)')
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'migration:calendar-boundaries-v1'").get()) {
+    // Older generated rows omitted the template's shared flag.
+    db.exec(`UPDATE events SET shared = (SELECT shared FROM events template WHERE template.id = events.recur_parent)
+      WHERE recur_parent IS NOT NULL AND EXISTS (SELECT 1 FROM events template WHERE template.id = events.recur_parent)`)
+
+    // All-day rows used to end at 23:59. Store exclusive midnight boundaries so
+    // local views and iCloud agree about the last covered day, including DST.
+    const legacy = db.prepare('SELECT id, ends_at FROM events WHERE all_day = 1').all() as { id: string; ends_at: string }[]
+    for (const row of legacy) {
+      const end = new Date(row.ends_at)
+      if (Number.isFinite(end.getTime()) && (end.getHours() || end.getMinutes() || end.getSeconds() || end.getMilliseconds())) {
+        end.setDate(end.getDate() + 1)
+        end.setHours(0, 0, 0, 0)
+        db.prepare('UPDATE events SET ends_at = ? WHERE id = ?').run(end.toISOString(), row.id)
+      }
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('migration:calendar-boundaries-v1', 'done')").run()
+  }
 }
 
 function openConnection(): DB {
@@ -215,6 +258,7 @@ function openConnection(): DB {
 }
 
 function applySchema(db: DB): void {
+  try { db.pragma('busy_timeout = 5000') } catch { /* replica may not support it */ }
   // Pragmas can be rejected by replica connections — never let that be fatal.
   try {
     db.pragma('journal_mode = WAL')
@@ -227,7 +271,8 @@ function applySchema(db: DB): void {
     /* ignore */
   }
   db.exec(SCHEMA)
-  migrate(db)
+  // Desktop and MCP can initialize together; migration/seeding is one write.
+  db.transaction(() => migrate(db)).immediate()
 }
 
 /**
@@ -235,7 +280,7 @@ function applySchema(db: DB): void {
  * remote state BEFORE creating/seeding tables (so a second device doesn't
  * re-seed people that already exist), then pushes any local changes back.
  */
-export async function initDb(): Promise<void> {
+async function initialize(): Promise<void> {
   if (!_db) _db = openConnection()
   if (_cloud) {
     try {
@@ -252,6 +297,15 @@ export async function initDb(): Promise<void> {
       console.error('[doneline] post-setup cloud sync failed:', err)
     }
   }
+  _initialized = true
+}
+
+export function initDb(): Promise<void> {
+  if (_initialized) return Promise.resolve()
+  if (!_initInFlight) {
+    _initInFlight = initialize().finally(() => { _initInFlight = null })
+  }
+  return _initInFlight
 }
 
 export function getDb(): DB {
@@ -259,14 +313,27 @@ export function getDb(): DB {
   // Lazy fallback (e.g. local-only contexts that never called initDb).
   _db = openConnection()
   applySchema(_db)
+  _initialized = true
   return _db
 }
 
 /** Pull + push with the shared workspace. No-op (returns false) in local mode. */
-export async function cloudSync(): Promise<boolean> {
-  if (!_db || !_cloud) return false
-  await _db.sync()
-  return true
+export function cloudSync(): Promise<boolean> {
+  if (!_db || !_cloud) return Promise.resolve(false)
+  if (_syncInFlight) {
+    _syncRequested = true
+    return _syncInFlight
+  }
+  const connection = _db
+  _syncInFlight = Promise.resolve().then(async () => {
+    do {
+      _syncRequested = false
+      await connection.sync()
+      // Include writes made while the previous pull/push was running.
+    } while (_syncRequested && _db === connection)
+    return _db === connection
+  }).finally(() => { _syncInFlight = null })
+  return _syncInFlight
 }
 
 export function isCloud(): boolean {
@@ -278,11 +345,14 @@ export function closeDb(): void {
     _db.close()
     _db = null
     _cloud = false
+    _initialized = false
   }
 }
 
 /** Re-open after the workspace connection changed (connect / disconnect). */
 export async function reopenDb(): Promise<void> {
+  await _initInFlight?.catch(() => {})
+  await _syncInFlight?.catch(() => {})
   closeDb()
   await initDb()
 }

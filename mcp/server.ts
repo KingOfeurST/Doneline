@@ -10,6 +10,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
+import { version } from '../package.json'
+import { timestamp } from '../core/validation.js'
 import {
   initDb,
   cloudSync,
@@ -23,6 +25,7 @@ import {
   deleteGoal,
   listTodos,
   listTodayTodos,
+  getTodo,
   listArchivedTodos,
   createTodo,
   updateTodo,
@@ -33,13 +36,18 @@ import {
   listEvents,
   listDayEvents,
   listEventTemplates,
+  getEvent,
   createEvent,
   updateEvent,
   deleteEvent,
   syncCalendar,
   pushEvent,
   updateRemoteEvent,
-  deleteRemoteEvent,
+  queueCalendarSync,
+  previewRemoval,
+  removeRange,
+  ensureTodoInstancesForDate,
+  ensureEventInstancesForRange,
   getCalDavConfig,
   runMaintenance,
   sendNudge,
@@ -56,7 +64,7 @@ import {
 
 const server = new McpServer({
   name: 'doneline',
-  version: '0.1.0'
+  version
 })
 
 function text(data: unknown) {
@@ -64,7 +72,7 @@ function text(data: unknown) {
 }
 
 /** Pull/push the shared workspace (no-op in local mode). Never throws. */
-const sync = () => cloudSync().catch(() => false)
+const sync = async () => { await initDb(); return cloudSync().catch(() => false) }
 
 /** This device's profile id. Matches how the app resolves "me" (src/main/ipc.ts),
  *  so Claude writes to the profile the user is actually looking at. Defaulting
@@ -82,29 +90,34 @@ const selfId = () => getSelfPersonId() ?? primaryPersonId()
  * matching how the app writes all-day events.
  */
 function toUtcIso(value: string): string {
-  const v = String(value).trim()
-  if (/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v)) {
-    const parts = v.split('-').map(Number)
-    return new Date(parts[0], parts[1] - 1, parts[2]).toISOString()
-  }
-  const hasZone = /(Z|[+-][0-9]{2}:?[0-9]{2})$/i.test(v)
-  const d = new Date(hasZone ? v : v.replace(' ', 'T'))
-  return Number.isNaN(d.getTime()) ? value : d.toISOString()
+  return timestamp(value)
 }
 
 const utcOrNull = (v?: string | null) => (v ? toUtcIso(v) : null)
 
 /** Build a recurrence JSON string from simple tool params. */
-function recurrenceJson(repeat?: 'none' | 'daily' | 'weekly', days?: number[]): string | null {
-  if (!repeat || repeat === 'none') return null
-  const rec: Recurrence = repeat === 'daily' ? { freq: 'daily' } : { freq: 'weekly', days: days ?? [] }
+function recurrenceJson(repeat?: 'none' | 'daily' | 'weekly', days?: number[], from?: string | null, until?: string | null, existing?: string | null): string | null {
+  if (repeat === 'none') return null
+  const previous = existing ? JSON.parse(existing) as Recurrence : undefined
+  const frequency = repeat ?? previous?.freq
+  if (!frequency) {
+    if (days !== undefined || from !== undefined || until !== undefined) throw new Error('Choose daily or weekly repeat before setting repeat dates.')
+    return null
+  }
+  const rec: Recurrence = { ...previous, freq: frequency }
+  if (frequency === 'weekly') rec.days = days ?? previous?.days ?? []
+  else delete rec.days
+  if (from !== undefined) { if (from) rec.startDate = from; else delete rec.startDate }
+  if (until !== undefined) { if (until) rec.endDate = until; else delete rec.endDate }
   return JSON.stringify(rec)
 }
 
 const repeatSchema = {
+  repeat_from: z.string().nullable().optional().describe('First allowed occurrence date, inclusive YYYY-MM-DD; defaults to the item date'),
+  repeat_until: z.string().nullable().optional().describe('Last allowed occurrence date, inclusive YYYY-MM-DD; null means no end date'),
   repeat: z.enum(['none', 'daily', 'weekly']).optional().describe("Repeat rule; 'weekly' uses repeat_days"),
   repeat_days: z
-    .array(z.number().min(0).max(6))
+    .array(z.number().int().min(0).max(6))
     .optional()
     .describe('Weekdays for weekly repeat (0=Sun … 6=Sat)')
 }
@@ -141,6 +154,7 @@ server.tool(
   async ({ person_id }) => {
     await sync()
     const day = localDay()
+    ensureTodoInstancesForDate(day)
     return text({ day, todos: listTodayTodos(day, person_id), events: listDayEvents(day, person_id) })
   }
 )
@@ -159,9 +173,9 @@ server.tool(
     notes: z.string().optional(),
     ...repeatSchema
   },
-  async ({ title, person_id, goal_id, due_at, notes, repeat, repeat_days }) => {
+  async ({ title, person_id, goal_id, due_at, notes, repeat, repeat_days, repeat_from, repeat_until }) => {
     await sync()
-    const recurrence = recurrenceJson(repeat, repeat_days)
+    const recurrence = recurrenceJson(repeat, repeat_days, repeat_from, repeat_until)
     const todo = createTodo({
       title,
       person_id: person_id ?? selfId(),
@@ -173,7 +187,7 @@ server.tool(
     // Only when a repeat rule was set, matching the app. runMaintenance also
     // archives and purges, so calling it on every add would quietly destroy
     // archived todos older than the retention window.
-    if (recurrence) runMaintenance()
+    if (recurrence) ensureTodoInstancesForDate(localDay())
     await sync()
     return text(todo)
   }
@@ -206,16 +220,18 @@ server.tool(
     person_id: z.string().optional(),
     ...repeatSchema
   },
-  async ({ id, title, due_at, notes, goal_id, person_id, repeat, repeat_days }) => {
+  async ({ id, title, due_at, notes, goal_id, person_id, repeat, repeat_days, repeat_from, repeat_until }) => {
     await sync()
+    const changesRepeat = repeat !== undefined || repeat_days !== undefined || repeat_from !== undefined || repeat_until !== undefined
     const result = updateTodo(id, {
       title,
       due_at: due_at == null ? due_at : toUtcIso(due_at),
       notes,
       goal_id,
       person_id,
-      recurrence: repeat === undefined ? undefined : recurrenceJson(repeat, repeat_days)
+      recurrence: changesRepeat ? recurrenceJson(repeat, repeat_days, repeat_from, repeat_until, getTodo(id)?.recurrence) : undefined
     })
+    if (result?.recurrence) ensureTodoInstancesForDate(localDay())
     await sync()
     return result ? text(result) : text({ error: 'Todo not found', id })
   }
@@ -334,9 +350,10 @@ server.tool(
   {
     title: z.string(),
     starts_at: z.string().describe('Start in local time, e.g. 2026-06-15T15:45'),
-    ends_at: z.string().describe('End in local time (use a later day for multi-day events)'),
+    ends_at: z.string().describe('End of ONE occurrence in local time (a later day makes a multi-day event). Use repeat_until for the last date of a repeat schedule.'),
     person_id: z.string().optional().describe('Owner profile id; defaults to the current profile'),
     all_day: z.boolean().optional(),
+    shared: z.boolean().optional().describe('Show this event for every profile'),
     location: z.string().optional(),
     notes: z.string().optional(),
     attendees: z.string().optional().describe('Comma-separated names'),
@@ -345,20 +362,24 @@ server.tool(
   },
   async (args) => {
     await sync()
-    const recurrence = recurrenceJson(args.repeat, args.repeat_days)
+    const recurrence = recurrenceJson(args.repeat, args.repeat_days, args.repeat_from, args.repeat_until)
     const ev = createEvent({
       title: args.title,
       starts_at: toUtcIso(args.starts_at),
       ends_at: toUtcIso(args.ends_at),
       person_id: args.person_id ?? selfId(),
       all_day: args.all_day,
+      shared: args.shared,
       location: args.location ?? null,
       notes: args.notes ?? null,
       attendees: args.attendees ?? null,
       color: args.color,
       recurrence
     })
-    if (recurrence) runMaintenance()
+    if (recurrence) {
+      const last = new Date(); last.setDate(last.getDate() + 59)
+      ensureEventInstancesForRange(new Date(), last)
+    }
     // Push straight to the connected calendar, as the app does on create.
     await pushEvent(ev.id).catch((err) => console.error('[doneline-mcp] pushEvent failed:', err))
     await sync()
@@ -368,17 +389,20 @@ server.tool(
 
 server.tool(
   'update_event',
-  'Edit a calendar event: title, times, location, notes, attendees or colour. Mirrors the change to Apple Calendar when the event is synced.',
+  'Edit an event or repeat-rule template. Editing a dated occurrence affects only that occurrence. Setting a new start without an end preserves the event duration.',
   {
     id: z.string(),
     title: z.string().optional(),
     starts_at: z.string().optional().describe('Start in local time'),
     ends_at: z.string().optional().describe('End in local time'),
     all_day: z.boolean().optional(),
+    shared: z.boolean().optional(),
+    person_id: z.string().optional(),
     location: z.string().nullable().optional(),
     notes: z.string().nullable().optional(),
     attendees: z.string().nullable().optional().describe('Comma-separated names'),
-    color: z.string().optional().describe('Hex color')
+    color: z.string().optional().describe('Hex color'),
+    ...repeatSchema
   },
   async (args) => {
     await sync()
@@ -391,6 +415,11 @@ server.tool(
     if (args.notes !== undefined) patch.notes = args.notes
     if (args.attendees !== undefined) patch.attendees = args.attendees
     if (args.color !== undefined) patch.color = args.color
+    if (args.shared !== undefined) patch.shared = args.shared ? 1 : 0
+    if (args.person_id !== undefined) patch.person_id = args.person_id
+    if (args.repeat !== undefined || args.repeat_days !== undefined || args.repeat_from !== undefined || args.repeat_until !== undefined) {
+      patch.recurrence = recurrenceJson(args.repeat, args.repeat_days, args.repeat_from, args.repeat_until, getEvent(args.id)?.recurrence)
+    }
     const result = updateEvent(args.id, patch)
     if (!result) return text({ error: 'Event not found', id: args.id })
     await updateRemoteEvent(args.id).catch((err) =>
@@ -407,17 +436,41 @@ server.tool(
   { id: z.string() },
   async ({ id }) => {
     await sync()
-    // Remote first: the local row still holds the CalDAV UID at this point.
-    await deleteRemoteEvent(id).catch((err) =>
-      console.error('[doneline-mcp] deleteRemoteEvent failed:', err)
-    )
     deleteEvent(id)
+    queueCalendarSync()
     await sync()
     return text({ deleted: id })
   }
 )
 
 // ---- Calendar sync ----
+server.tool(
+  'remove_items_in_range',
+  'Preview or remove dated events and todos between two inclusive local dates, optionally matching part of a title. Defaults to preview. Preview returns expected_ids; pass those exact IDs with preview=false to remove only the reviewed matches. Deleted recurring occurrences stay deleted while their repeat rule continues outside the range.',
+  {
+    kind: z.enum(['events', 'todos', 'both']).default('both'),
+    from_day: z.string().describe('First day, inclusive YYYY-MM-DD'),
+    to_day: z.string().describe('Last day, inclusive YYYY-MM-DD'),
+    title_contains: z.string().optional().describe('Case-insensitive literal title text; omit to match every title'),
+    person_id: z.string().optional().describe('Owner profile; defaults to current profile. Use all for all owners.'),
+    preview: z.boolean().default(true),
+    expected_ids: z.array(z.string()).optional().describe('Exact expected_ids returned by the most recent preview; required to remove')
+  },
+  async ({ kind, from_day, to_day, title_contains, person_id, preview, expected_ids }) => {
+    await sync()
+    const input = { kind, fromDay: from_day, toDay: to_day, title: title_contains, personId: person_id ?? selfId(), expectedIds: expected_ids }
+    if (preview) {
+      const matches = previewRemoval(input)
+      return text({ ...matches, expected_ids: [...matches.events.map((event) => `events:${event.id}`), ...matches.todos.map((todo) => `todos:${todo.id}`)] })
+    }
+    if (!expected_ids) throw new Error('Preview the range first, then provide its expected_ids to remove those matches.')
+    const removed = removeRange(input)
+    queueCalendarSync()
+    await sync()
+    return text({ removed })
+  }
+)
+
 server.tool(
   'sync_calendar',
   "Run a two-way sync with a person's connected Apple/iCloud calendar (defaults to the current profile).",
@@ -515,7 +568,7 @@ server.tool(
 
 server.tool(
   'delete_goal',
-  'Delete a goal permanently, along with any repeat rules attached to it. Finished todos under the goal are kept. Prefer update_goal with archived=true to retire a goal without losing it.',
+  'Delete a goal permanently and all its linked todos and repeat rules. Prefer update_goal with archived=true to keep its history.',
   { id: z.string() },
   async ({ id }) => {
     await sync()
@@ -545,8 +598,11 @@ server.tool(
   },
   async ({ id, kind }) => {
     await sync()
+    const template = kind === 'todo' ? getTodo(id) : getEvent(id)
+    if (!template?.recurrence) throw new Error('Use the id of a repeat-rule template from list_recurring.')
     if (kind === 'todo') deleteTodo(id)
     else deleteEvent(id)
+    queueCalendarSync()
     await sync()
     return text({ stopped: id, kind })
   }

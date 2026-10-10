@@ -10,26 +10,44 @@ import type { Person } from '../../../shared/api'
 export default function SelfSetupBanner() {
   const [need, setNeed] = useState(false)
   const [people, setPeople] = useState<Person[]>([])
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    ;(async () => {
+    let cancelled = false
+    const check = async () => {
       const status = await api.workspace.status()
-      if (!status.cloud) return
+      if (!status.cloud) { if (!cancelled) setNeed(false); return }
       const raw = await api.presence.getSelfRaw()
-      if (raw) return
       const list = await api.people.list()
-      if (list.length > 1) {
+      if (cancelled) return
+      if (!list.some((p) => p.id === raw) && list.length > 1) {
         setPeople(list)
         setNeed(true)
-      }
-    })()
+      } else setNeed(false)
+    }
+    const refresh = () => { void check().catch(() => {}) }
+    refresh()
+    const off = api.workspace.onChanged(refresh)
+    window.addEventListener('doneline:identity', refresh)
+    return () => { cancelled = true; off(); window.removeEventListener('doneline:identity', refresh) }
   }, [])
 
   if (!need) return null
 
   async function pick(id: string) {
-    await api.presence.setSelf(id)
-    setNeed(false)
+    if (saving) return
+    setSaving(true)
+    setError('')
+    try {
+      await api.presence.setSelf(id)
+      window.dispatchEvent(new Event('doneline:identity'))
+      setNeed(false)
+    } catch {
+      setError('Could not select your profile. Please try again.')
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -42,10 +60,12 @@ export default function SelfSetupBanner() {
           who. Your friend picks theirs on their own machine.
         </p>
         <div className="mt-5 space-y-2">
+          {error && <p role="alert" className="text-sm font-semibold text-rose-ink">{error}</p>}
           {people.map((p) => (
             <button
               key={p.id}
               onClick={() => pick(p.id)}
+              disabled={saving}
               className="flex w-full items-center gap-3 rounded-2xl bg-slate-50/80 p-3 text-left font-bold text-ink transition hover:bg-mint-card/60"
             >
               <span

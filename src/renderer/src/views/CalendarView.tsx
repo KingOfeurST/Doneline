@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addMonths,
   addWeeks,
@@ -16,23 +16,16 @@ import type { CalEvent } from '../../../shared/api'
 import { useProfile } from '../profile'
 import AddEventModal from '../components/AddEventModal'
 import DayDetailModal from '../components/DayDetailModal'
+import RangeRemovalModal from '../components/RangeRemovalModal'
+import RepeatingEventsModal from '../components/RepeatingEventsModal'
 import { localDateInput, fmtTime } from '../lib/format'
+import { eventOverlapsDay, layoutTimedEvents, nextDay } from '../lib/calendarLayout'
 
 type Mode = 'month' | 'week' | 'hour-grid'
 
-const HOUR_START = 6  // 6am
-const HOUR_END = 23   // 11pm
+const HOUR_START = 0
+const HOUR_END = 24
 const HOUR_HEIGHT = 64 // px per hour
-
-function eventTop(starts_at: string): number {
-  const d = new Date(starts_at)
-  return (d.getHours() + d.getMinutes() / 60 - HOUR_START) * HOUR_HEIGHT
-}
-
-function eventHeight(starts_at: string, ends_at: string): number {
-  const mins = (new Date(ends_at).getTime() - new Date(starts_at).getTime()) / 60_000
-  return Math.max(HOUR_HEIGHT / 2, (mins / 60) * HOUR_HEIGHT)
-}
 
 export default function CalendarView() {
   const { active, queryPersonId, defaultOwnerId, personById, tick } = useProfile()
@@ -44,6 +37,12 @@ export default function CalendarView() {
   const [pickDate, setPickDate] = useState<string | undefined>()
   const [editEvent, setEditEvent] = useState<CalEvent | null>(null)
   const [detailDay, setDetailDay] = useState<string | null>(null)
+  const [showRemoval, setShowRemoval] = useState(false)
+  const [showRepeating, setShowRepeating] = useState(false)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const loadRequest = useRef(0)
+  const gridRef = useRef<HTMLDivElement>(null)
 
   const range = useMemo(() => {
     if (mode === 'week' || mode === 'hour-grid') {
@@ -55,28 +54,45 @@ export default function CalendarView() {
     const to = endOfWeek(endOfMonth(cursor), { weekStartsOn: 0 })
     return { from, to }
   }, [cursor, mode])
+  const scope = `${range.from.toISOString()}|${range.to.toISOString()}|${queryPersonId || ''}`
+  const currentScope = useRef(scope)
+  currentScope.current = scope
+  const previousScope = useRef('')
 
   const load = useCallback(async () => {
-    const evs = await api.events.list({
-      from: range.from.toISOString(),
-      to: range.to.toISOString(),
-      personId: queryPersonId
-    })
-    setEvents(evs)
-  }, [range.from, range.to, queryPersonId, tick])
+    const request = ++loadRequest.current
+    setLoading(true)
+    setError('')
+    try {
+      const evs = await api.events.list({
+        from: range.from.toISOString(),
+        to: nextDay(range.to).toISOString(),
+        personId: queryPersonId
+      })
+      if (request === loadRequest.current && scope === currentScope.current) setEvents(evs)
+    } catch (cause) {
+      if (request === loadRequest.current && scope === currentScope.current) setError(cause instanceof Error ? cause.message : 'Could not load the calendar. Please try again.')
+    } finally { if (request === loadRequest.current) setLoading(false) }
+  }, [range.from, range.to, queryPersonId, tick, scope])
+  const latestLoad = useRef(load)
+  latestLoad.current = load
+  const refresh = useCallback(() => latestLoad.current(), [])
 
   useEffect(() => {
-    load()
-  }, [load])
+    if (previousScope.current !== scope) setEvents([])
+    previousScope.current = scope
+    void load()
+    return () => { loadRequest.current++ }
+  }, [load, scope])
+
+  useEffect(() => {
+    if (mode === 'hour-grid' && gridRef.current) gridRef.current.scrollTop = 8 * HOUR_HEIGHT
+  }, [mode])
 
   const days = eachDayOfInterval({ start: range.from, end: range.to })
 
   function eventsOn(day: Date): CalEvent[] {
-    return events.filter((e) => {
-      const s = new Date(e.starts_at)
-      const en = new Date(e.ends_at)
-      return isSameDay(s, day) || (s <= day && en >= day)
-    })
+    return events.filter((event) => eventOverlapsDay(event, day))
   }
 
   function step(dir: number) {
@@ -116,6 +132,14 @@ export default function CalendarView() {
         </div>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn-primary" onClick={() => { setPickDate(localDateInput(cursor)); setEditEvent(null); setShowEvent(true) }}>+ Add event</button>
+        <button className="btn-soft" onClick={() => setShowRepeating(true)}>Repeating events</button>
+        <button className="btn-soft" onClick={() => setShowRemoval(true)}>Remove items</button>
+        {loading && <span role="status" className="ml-auto text-xs font-semibold text-slate-400">Loading…</span>}
+      </div>
+      {error && <div role="alert" className="flex items-center gap-3 rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-ink">{error}<button className="btn-soft" onClick={() => void load()}>Retry</button></div>}
+
       {mode === 'hour-grid' ? (
         /* Hour-grid week view */
         <div className="card rise overflow-hidden">
@@ -123,8 +147,9 @@ export default function CalendarView() {
           <div className="grid border-b border-slate-100" style={{ gridTemplateColumns: '56px repeat(7, 1fr)' }}>
             <div className="py-2" />
             {days.map((day) => (
-              <div
+              <button
                 key={day.toISOString()}
+                onClick={() => openDay(day)}
                 className={`py-2 text-center text-xs font-bold ${isSameDay(day, new Date()) ? 'text-mint-ink' : 'text-slate-500'}`}
               >
                 <div className="uppercase tracking-wide text-[10px]">{format(day, 'EEE')}</div>
@@ -135,12 +160,23 @@ export default function CalendarView() {
                 >
                   {format(day, 'd')}
                 </div>
-              </div>
+              </button>
             ))}
           </div>
 
+          {/* All-day events have their own row, outside the timed grid. */}
+          <div className="grid border-b border-slate-100" style={{ gridTemplateColumns: '56px repeat(7, 1fr)' }}>
+            <span className="p-2 text-right text-[10px] font-bold text-slate-400">All day</span>
+            {days.map((day) => <div key={day.toISOString()} className="min-h-9 space-y-1 border-l border-slate-100 p-1">
+              {eventsOn(day).filter((event) => event.all_day).map((event) => <button key={event.id}
+                className="block w-full truncate rounded-md px-1 py-0.5 text-left text-[10px] font-bold"
+                style={{ background: (event.color || '#2f7a4d') + '22', color: event.color || '#2f7a4d' }}
+                onClick={() => { setEditEvent(event); setShowEvent(true) }}>{event.title}</button>)}
+            </div>)}
+          </div>
+
           {/* Time grid */}
-          <div className="overflow-y-auto" style={{ maxHeight: '70vh' }}>
+          <div ref={gridRef} className="overflow-y-auto" style={{ maxHeight: '70vh' }}>
             <div className="relative grid" style={{ gridTemplateColumns: '56px repeat(7, 1fr)', height: gridHeight }}>
               {/* Hour labels + horizontal lines */}
               {hours.map((h) => (
@@ -150,7 +186,7 @@ export default function CalendarView() {
                   style={{ top: (h - HOUR_START) * HOUR_HEIGHT }}
                 >
                   <span className="w-14 shrink-0 pr-2 text-right text-[10px] font-bold text-slate-300 -translate-y-2">
-                    {h === 12 ? '12pm' : h > 12 ? `${h - 12}pm` : `${h}am`}
+                    {h === 0 ? '12am' : h === 12 ? '12pm' : h > 12 ? `${h - 12}pm` : `${h}am`}
                   </span>
                   <div className="flex-1 border-t border-slate-100" />
                 </div>
@@ -159,50 +195,37 @@ export default function CalendarView() {
               {/* Day columns with events */}
               <div className="col-start-2 col-end-[-1] grid grid-cols-7 relative" style={{ height: gridHeight }}>
                 {days.map((day) => {
-                  const dayEvs = eventsOn(day).filter((e) => !e.all_day)
-                  const allDayEvs = eventsOn(day).filter((e) => e.all_day)
+                  const placements = layoutTimedEvents(eventsOn(day).filter((event) => !event.all_day), day, 20 / HOUR_HEIGHT * 60)
                   return (
                     <div
                       key={day.toISOString()}
                       className="relative border-l border-slate-100 cursor-pointer hover:bg-mint-card/10 transition"
                       onClick={() => openDay(day)}
                     >
-                      {/* All-day pill at the top */}
-                      {allDayEvs.map((e) => (
-                        <div
-                          key={e.id}
-                          className="mx-1 mb-0.5 truncate rounded-md px-1 py-0.5 text-[10px] font-bold"
-                          style={{ background: (e.color || '#2f7a4d') + '22', color: e.color || '#2f7a4d' }}
-                          onClick={(ev) => { ev.stopPropagation(); setEditEvent(e); setShowEvent(true) }}
-                        >
-                          {e.title}
-                        </div>
-                      ))}
-
                       {/* Timed events */}
-                      {dayEvs.map((e) => {
-                        const top = eventTop(e.starts_at)
-                        const height = eventHeight(e.starts_at, e.ends_at)
-                        if (top < 0 || top > gridHeight) return null
+                      {placements.map(({ event: e, startMinute, endMinute, column, columns }) => {
+                        const top = startMinute / 60 * HOUR_HEIGHT
+                        const height = Math.max(20, (endMinute - startMinute) / 60 * HOUR_HEIGHT)
                         const p = combined ? personById(e.person_id) : undefined
                         return (
-                          <div
+                          <button
                             key={e.id}
-                            className="absolute mx-1 overflow-hidden rounded-lg px-1.5 py-1 text-[11px] font-bold cursor-pointer shadow-sm transition hover:brightness-95"
+                            title={`${e.title} · ${fmtTime(e.starts_at)} – ${fmtTime(e.ends_at)}`}
+                            className="absolute flex flex-col items-start justify-start overflow-hidden rounded-lg px-1.5 py-1 text-left text-[11px] font-bold cursor-pointer shadow-sm transition hover:brightness-95"
                             style={{
                               top,
                               height: Math.min(height, gridHeight - top),
-                              left: 0,
-                              right: 0,
+                              left: `calc(${column / columns * 100}% + 2px)`,
+                              width: `calc(${100 / columns}% - 4px)`,
                               background: (e.color || '#2f7a4d') + '22',
                               color: e.color || '#2f7a4d',
                               borderLeft: `3px solid ${e.color || '#2f7a4d'}`
                             }}
                             onClick={(ev) => { ev.stopPropagation(); setEditEvent(e); setShowEvent(true) }}
                           >
-                            {p && <span className="mr-0.5">{p.emoji}</span>}
-                            {format(new Date(e.starts_at), 'h:mm')} {e.title}
-                          </div>
+                            <span>{p && <span className="mr-0.5">{p.emoji}</span>}
+                            {new Date(e.starts_at) < day ? 'Continues' : fmtTime(e.starts_at)} {e.title}</span>
+                          </button>
                         )
                       })}
                     </div>
@@ -279,7 +302,7 @@ export default function CalendarView() {
           setDetailDay(null)
           setShowEvent(true)
         }}
-        onChanged={load}
+        onChanged={refresh}
       />
 
       <AddEventModal
@@ -288,11 +311,16 @@ export default function CalendarView() {
           setShowEvent(false)
           setEditEvent(null)
         }}
-        onCreated={load}
+        onCreated={refresh}
         defaultDate={pickDate}
         ownerId={defaultOwnerId}
         editEvent={editEvent}
       />
+      <RangeRemovalModal open={showRemoval} onClose={() => setShowRemoval(false)} onRemoved={refresh}
+        fromDay={localDateInput(mode === 'month' ? startOfMonth(cursor) : range.from)}
+        toDay={localDateInput(mode === 'month' ? endOfMonth(cursor) : range.to)} />
+      <RepeatingEventsModal open={showRepeating} onClose={() => setShowRepeating(false)} onChanged={refresh}
+        onEdit={(event) => { setShowRepeating(false); setEditEvent(event); setShowEvent(true) }} />
     </div>
   )
 }

@@ -23,6 +23,10 @@ export const CH = {
   eventCreate: 'events:create',
   eventUpdate: 'events:update',
   eventDelete: 'events:delete',
+  eventTemplates: 'events:templates',
+  eventSeriesDelete: 'events:seriesDelete',
+  itemsPreviewRemoval: 'items:previewRemoval',
+  itemsRemoveRange: 'items:removeRange',
 
   calGetConfig: 'caldav:getConfig',
   calSetConfig: 'caldav:setConfig',
@@ -43,6 +47,7 @@ export const CH = {
   maintenanceRun: 'app:maintenance',
   toggleFullscreen: 'app:toggleFullscreen',
   appVersion: 'app:version',
+  updateStatus: 'update:status:get',
   updateCheck: 'update:check',
   updateInstall: 'update:install',
 

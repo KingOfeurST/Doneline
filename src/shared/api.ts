@@ -14,6 +14,16 @@ import type {
   NudgeKind,
   DailyNote
 } from '../../core/index.js'
+import type { RemovalRange } from '../../core/rangeRemoval.js'
+export type { RemovalRange } from '../../core/rangeRemoval.js'
+
+export interface UpdateStatus {
+  state: 'idle' | 'dev' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'installing' | 'error'
+  canAutoInstall: boolean
+  version?: string
+  percent?: number
+  message?: string
+}
 
 // Re-export the entity types so the renderer can import them from one place.
 export type {
@@ -97,6 +107,7 @@ export interface DonelineAPI {
   }
 
   events: {
+    templates(opts?: { personId?: string }): Promise<CalEvent[]>
     list(opts?: { from?: string; to?: string; personId?: string }): Promise<CalEvent[]>
     day(day?: string, personId?: string): Promise<CalEvent[]>
     create(input: {
@@ -114,6 +125,12 @@ export interface DonelineAPI {
     }): Promise<CalEvent>
     update(id: string, patch: Partial<Omit<CalEvent, 'id' | 'created_at'>>): Promise<CalEvent | undefined>
     remove(id: string): Promise<void>
+    removeSeries(id: string): Promise<void>
+  }
+
+  items: {
+    previewRemoval(input: RemovalRange): Promise<{ events: CalEvent[]; todos: TodoWithGoal[] }>
+    removeRange(input: RemovalRange): Promise<{ events: number; todos: number }>
   }
 
   /** Generate recurring instances, archive yesterday's done todos, purge old ones. */
@@ -127,13 +144,14 @@ export interface DonelineAPI {
 
   updates: {
     version(): Promise<string>
-    check(): Promise<{ state: string; message?: string }>
+    status(): Promise<UpdateStatus>
+    check(): Promise<UpdateStatus>
     install(): Promise<void>
-    onStatus(cb: (s: { state: string; version?: string; percent?: number; message?: string }) => void): () => void
+    onStatus(cb: (s: UpdateStatus) => void): () => void
   }
 
   focus: {
-    record(input: { taskId?: string | null; durationSeconds: number; startedAt: string; endedAt: string }): Promise<boolean>
+    record(input: { personId?: string; taskId?: string | null; durationSeconds: number; startedAt: string; endedAt: string }): Promise<boolean>
     stats(personId?: string): Promise<FocusStats>
     sharedStreak(personIds: string[]): Promise<number>
     getTarget(): Promise<number>

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from './api'
 import { useProfile } from './profile'
 import type { Person, Presence } from '../../shared/api'
@@ -18,37 +18,42 @@ export interface FriendPresence {
  * remaining time counts down smoothly (computed locally from `ends_at`).
  */
 export function usePresence() {
-  const { people } = useProfile()
-  const [self, setSelf] = useState<string>('')
+  const { people, self } = useProfile()
   const [rows, setRows] = useState<Presence[]>([])
   const [, setNow] = useState(Date.now())
 
-  const refresh = useCallback(async () => {
-    setRows(await api.presence.list())
-  }, [])
-
   useEffect(() => {
-    api.presence.getSelf().then(setSelf)
-    refresh()
+    let cancelled = false
+    let request = 0
+    const refresh = async () => {
+      const current = ++request
+      try {
+        const next = await api.presence.list()
+        if (!cancelled && current === request) setRows(next)
+      } catch {}
+    }
+    void refresh()
     const off = api.workspace.onChanged(refresh)
     const poll = setInterval(refresh, 15_000)
     const tick = setInterval(() => setNow(Date.now()), 1000)
     return () => {
       off()
+      cancelled = true
       clearInterval(poll)
       clearInterval(tick)
     }
-  }, [refresh])
+  }, [])
 
   const now = Date.now()
   const friends: FriendPresence[] = people
-    .filter((p) => p.id !== self)
+    .filter((p) => !!self && p.id !== self)
     .map((person) => {
       const row = rows.find((r) => r.person_id === person.id)
       const fresh = row && now - new Date(row.updated_at).getTime() < STALE_MS
-      const focusing = fresh && row!.status === 'focusing'
+      const end = row?.ends_at ? new Date(row.ends_at).getTime() : 0
+      const focusing = fresh && row!.status === 'focusing' && Number.isFinite(end) && end > now
       const secondsLeft = focusing && row!.ends_at
-        ? Math.max(0, Math.round((new Date(row!.ends_at).getTime() - now) / 1000))
+        ? Math.max(0, Math.ceil((end - now) / 1000))
         : 0
       return {
         person,
@@ -58,9 +63,9 @@ export function usePresence() {
       }
     })
 
-  const nudge = useCallback((toPerson: string, message: string) => {
+  const nudge = (toPerson: string, message: string) => {
     return api.presence.nudge(toPerson, message)
-  }, [])
+  }
 
   return { self, friends, nudge }
 }

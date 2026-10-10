@@ -1,8 +1,6 @@
 name: Build installers
 
-# Builds the Windows .exe and macOS .dmg and publishes them to a GitHub Release
-# so the app can auto-update. Run manually from the Actions tab ("Run workflow")
-# after bumping the version in package.json, or push a version tag like v0.1.1.
+# Every native platform must pass before its installers become a public update.
 on:
   workflow_dispatch:
   push:
@@ -10,45 +8,96 @@ on:
       - 'v*'
 
 permissions:
-  contents: write # needed to create/update the GitHub Release
+  contents: read
+
+concurrency:
+  group: doneline-release
+  cancel-in-progress: false
 
 jobs:
   build:
+    name: Verify and build ${{ matrix.platform }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            script: publish:win
-          - os: macos-latest
-            script: publish:mac
+          - platform: windows-x64
+            os: windows-latest
+            script: dist:win
+            arch: x64
+          - platform: mac-arm64
+            os: macos-15
+            script: dist:mac
+            arch: arm64
+          - platform: mac-x64
+            os: macos-15-intel
+            script: dist:mac
+            arch: x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
-
       - run: npm ci
-
-      - run: npm run build
-
-      - name: Package & publish
-        run: npm run ${{ matrix.script }}
+      - name: Check tag matches the app version
+        run: node scripts/check-release-tag.cjs
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:mcp
+      - name: Package the tested app without publishing
+        run: npm run ${{ matrix.script }} -- --${{ matrix.arch }}
         env:
-          # Publish the release so auto-update works.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Don't try to sign/notarize the macOS build (no Apple certs here).
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-
-      - name: Upload installers (also as workflow artifacts)
+      - name: Test packaged native database and actual app startup
+        run: node tests/packaged-runtime.cjs --launch
+      - name: Upload verified installers and updater metadata
         uses: actions/upload-artifact@v4
         with:
-          name: doneline-${{ matrix.os }}
+          name: doneline-${{ matrix.platform }}
           path: |
             release/*.exe
             release/*.dmg
             release/*.zip
-          if-no-files-found: ignore
+            release/*.blockmap
+            release/latest*.yml
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish complete GitHub update
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: doneline-*
+          path: downloaded
+      - name: Merge Mac architectures and verify every updater checksum
+        run: node scripts/prepare-release.cjs downloaded release-publish
+      - name: Upload all assets before making the release visible
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          TAG="v$VERSION"
+          if gh release view "$TAG" --json isDraft > release-state.json 2>/dev/null; then
+            node -e "if (!require('./release-state.json').isDraft) throw new Error('This version is already public. Bump the version instead of replacing an update.')"
+          else
+            gh release create "$TAG" --verify-tag --draft --title "Doneline $VERSION" --notes-file build/release-notes.md
+          fi
+          gh release upload "$TAG" release-publish/* --clobber
+          gh release edit "$TAG" --draft=false --latest

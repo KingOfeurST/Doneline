@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { CH, EVT } from '../shared/channels.js'
-import type { DonelineAPI } from '../shared/api.js'
+import type { DonelineAPI, UpdateStatus } from '../shared/api.js'
 
 const api: DonelineAPI = {
   today: () => ipcRenderer.invoke(CH.today),
@@ -40,11 +40,18 @@ const api: DonelineAPI = {
   },
 
   events: {
+    templates: (opts) => ipcRenderer.invoke(CH.eventTemplates, opts),
     list: (opts) => ipcRenderer.invoke(CH.eventsList, opts),
     day: (day, personId) => ipcRenderer.invoke(CH.eventsDay, day, personId),
     create: (input) => ipcRenderer.invoke(CH.eventCreate, input),
     update: (id, patch) => ipcRenderer.invoke(CH.eventUpdate, id, patch),
-    remove: (id) => ipcRenderer.invoke(CH.eventDelete, id)
+    remove: (id) => ipcRenderer.invoke(CH.eventDelete, id),
+    removeSeries: (id) => ipcRenderer.invoke(CH.eventSeriesDelete, id)
+  },
+
+  items: {
+    previewRemoval: (input) => ipcRenderer.invoke(CH.itemsPreviewRemoval, input),
+    removeRange: (input) => ipcRenderer.invoke(CH.itemsRemoveRange, input)
   },
 
   caldav: {
@@ -84,10 +91,11 @@ const api: DonelineAPI = {
 
   updates: {
     version: () => ipcRenderer.invoke(CH.appVersion),
+    status: () => ipcRenderer.invoke(CH.updateStatus),
     check: () => ipcRenderer.invoke(CH.updateCheck),
     install: () => ipcRenderer.invoke(CH.updateInstall),
     onStatus: (cb) => {
-      const handler = (_e: unknown, s: { state: string; version?: string; percent?: number; message?: string }) => cb(s)
+      const handler = (_e: unknown, s: UpdateStatus) => cb(s)
       ipcRenderer.on(EVT.updateStatus, handler)
       return () => ipcRenderer.removeListener(EVT.updateStatus, handler)
     }

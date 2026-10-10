@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import type { Nudge } from '../../../shared/api'
 import { playBuzz, playNudge } from '../lib/audioFx'
+import { useProfile } from '../profile'
 
 const AUTO_DISMISS_MS = 8000
 
@@ -13,48 +14,58 @@ const AUTO_DISMISS_MS = 8000
  * notification the user didn't see. Buzzes also play a sound and flash the card.
  */
 export default function NudgeToast() {
+  const { self } = useProfile()
   const [queue, setQueue] = useState<Nudge[]>([])
   const seenRef = useRef<Set<string>>(new Set())
+  const displayedRef = useRef<Set<string>>(new Set())
   // The 5s poll and the workspace:changed listener can fire together; without a
   // guard two in-flight checks could both claim the same nudge.
   const inFlight = useRef(false)
+  const requestId = useRef(0)
 
   const check = useCallback(async () => {
     if (inFlight.current) return
     inFlight.current = true
+    const request = ++requestId.current
     try {
       const unseen = await api.presence.unseenNudges()
+      if (request !== requestId.current) return
       const fresh = unseen.filter((n) => !seenRef.current.has(n.id))
-      if (fresh.length === 0) return
-
       for (const n of fresh) seenRef.current.add(n.id)
-      setQueue((q) => [...q, ...fresh])
+      if (fresh.length > 0) setQueue((q) => {
+        const existing = new Set(q.map((n) => n.id))
+        return [...q, ...fresh.filter((n) => !existing.has(n.id))]
+      })
 
       // Sound once per batch rather than once per nudge, so a burst isn't deafening.
       if (fresh.some((n) => n.kind === 'buzz')) playBuzz()
-      else playNudge()
+      else if (fresh.length > 0) playNudge()
 
-      // Displayed → safe to clear server-side. If the write fails, forget the id
-      // so the next poll retries; otherwise the sender would wait on a delivery
-      // receipt that can never arrive.
-      for (const n of fresh) {
+      // Retry failed delivery receipts without showing or sounding the toast twice.
+      for (const n of unseen) {
+        if (request !== requestId.current) return
+        if (!displayedRef.current.has(n.id)) continue
         try {
           await api.presence.markNudgeSeen(n.id)
-        } catch {
-          seenRef.current.delete(n.id)
-        }
+        } catch {}
       }
+    } catch {
+      // Polling resumes when the local/shared store becomes available again.
     } finally {
       inFlight.current = false
     }
-  }, [])
+  }, [self])
 
   useEffect(() => {
+    setQueue([])
+    seenRef.current.clear()
+    displayedRef.current.clear()
     check()
     const off = api.workspace.onChanged(check)
     const poll = setInterval(check, 5000)
     return () => {
       off()
+      requestId.current++
       clearInterval(poll)
     }
   }, [check])
@@ -62,25 +73,34 @@ export default function NudgeToast() {
   function dismiss(id: string) {
     setQueue((q) => q.filter((n) => n.id !== id))
   }
+  const displayed = useCallback((id: string) => { displayedRef.current.add(id) }, [])
 
   if (queue.length === 0) return null
 
   return (
     <div className="pointer-events-none fixed right-5 top-20 z-[90] flex w-[min(340px,88vw)] flex-col gap-2">
       {queue.map((n) => (
-        <ToastCard key={n.id} nudge={n} onDismiss={() => dismiss(n.id)} />
+        <ToastCard key={n.id} nudge={n} onDisplayed={displayed} onDismiss={() => dismiss(n.id)} />
       ))}
     </div>
   )
 }
 
-function ToastCard({ nudge, onDismiss }: { nudge: Nudge; onDismiss: () => void }) {
+function ToastCard({ nudge, onDismiss, onDisplayed }: {
+  nudge: Nudge; onDismiss: () => void; onDisplayed: (id: string) => void
+}) {
   const buzz = nudge.kind === 'buzz'
+  const dismissRef = useRef(onDismiss)
+  dismissRef.current = onDismiss
+  useEffect(() => {
+    onDisplayed(nudge.id)
+    void api.presence.markNudgeSeen(nudge.id).catch(() => {})
+  }, [nudge.id, onDisplayed])
 
   useEffect(() => {
-    const t = setTimeout(onDismiss, AUTO_DISMISS_MS)
+    const t = setTimeout(() => dismissRef.current(), AUTO_DISMISS_MS)
     return () => clearTimeout(t)
-  }, [onDismiss])
+  }, [nudge.id])
 
   return (
     <div

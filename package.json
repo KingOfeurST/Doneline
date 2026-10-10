@@ -1,10 +1,16 @@
 {
   "name": "doneline",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Local-first desktop tasks, goals and calendar with Apple Calendar sync and an MCP server for Claude.",
   "author": "Chris",
   "license": "MIT",
   "main": "out/main/index.js",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "overrides": {
+    "@electron/get": "^5.1.0"
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
@@ -17,12 +23,15 @@
     "build:mcp": "esbuild mcp/server.ts --bundle --platform=node --format=cjs --packages=external --outfile=out/mcp/server.cjs",
     "mcp": "npm run build:mcp && node out/mcp/server.cjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test:mcp": "npm run build:mcp && node mcp/smoke-test.cjs"
+    "test:mcp": "npm run build:mcp && node mcp/smoke-test.cjs",
+    "test": "node tests/run.cjs",
+    "test:renderer": "node tests/renderer.test.cjs"
   },
   "dependencies": {
     "chrono-node": "^2.9.1",
     "date-fns": "^4.1.0",
     "electron-updater": "^6.3.9",
+    "ical.js": "^2.2.1",
     "libsql": "^0.5.7",
     "tsdav": "^2.1.5",
     "uuid": "^11.0.5",
@@ -30,24 +39,26 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^22.10.5",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@types/uuid": "^10.0.0",
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^5.2.0",
     "autoprefixer": "^10.4.20",
-    "electron": "^33.3.1",
-    "electron-builder": "^25.1.8",
-    "electron-vite": "^2.3.0",
-    "esbuild": "^0.24.2",
+    "electron": "^43.7.9",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "esbuild": "^0.28.2",
+    "js-yaml": "^4.3.2",
     "png2icons": "^2.0.1",
     "postcss": "^8.5.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "sharp": "^0.35.1",
-    "tailwindcss": "^3.4.17",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.7.3",
-    "vite": "^5.4.11"
+    "vite": "^7.3.7"
   },
   "build": {
     "appId": "com.chris.doneline",
@@ -56,7 +67,10 @@
       "output": "release"
     },
     "files": [
-      "out/**/*"
+      "out/main/**/*",
+      "out/preload/**/*",
+      "out/renderer/**/*",
+      "out/mcp/**/*"
     ],
     "extraResources": [
       {
@@ -78,6 +92,7 @@
     ],
     "win": {
       "target": "nsis",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
       "icon": "build/icon.ico"
     },
     "mac": {
@@ -86,6 +101,8 @@
         "zip"
       ],
       "category": "public.app-category.productivity",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "minimumSystemVersion": "14.0.0",
       "icon": "build/icon.icns"
     }
   }

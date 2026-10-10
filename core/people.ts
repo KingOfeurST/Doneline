@@ -24,13 +24,16 @@ export function createPerson(input: { name: string; color?: string; emoji?: stri
   const nextPos = (
     db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM people').get() as { p: number }
   ).p
-  db.prepare('INSERT INTO people (id, name, color, emoji, position) VALUES (?, ?, ?, ?, ?)').run(
-    id,
-    input.name.trim() || 'Someone',
-    input.color || '#2f6f9c',
-    input.emoji || '🙂',
-    nextPos
-  )
+  db.transaction(() => {
+    db.prepare('INSERT INTO people (id, name, color, emoji, position) VALUES (?, ?, ?, ?, ?)').run(
+      id,
+      input.name.trim() || 'Someone',
+      input.color || '#2f6f9c',
+      input.emoji || '🙂',
+      nextPos
+    )
+    recalculateSharedCompletions()
+  }).immediate()
   return getPerson(id)!
 }
 
@@ -40,45 +43,57 @@ export function updatePerson(
 ): Person | undefined {
   const cur = getPerson(id)
   if (!cur) return undefined
+  const name = (patch.name ?? cur.name).trim()
+  if (!name) throw new Error('Please enter a profile name.')
   getDb()
     .prepare('UPDATE people SET name = ?, color = ?, emoji = ? WHERE id = ?')
-    .run(patch.name ?? cur.name, patch.color ?? cur.color, patch.emoji ?? cur.emoji, id)
+    .run(name, patch.color ?? cur.color, patch.emoji ?? cur.emoji, id)
   return getPerson(id)
 }
 
 /** Delete a person and everything they own. Refuses to remove the last person. */
 export function deletePerson(id: string): void {
   const db = getDb()
-  const count = (db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n
-  if (count <= 1) throw new Error('Cannot delete the last profile.')
-  // Completions this person recorded, including ones on todos owned by someone
-  // else, plus completions on the todos about to be removed.
-  db.prepare('DELETE FROM todo_completions WHERE person_id = ?').run(id)
-  db.prepare(
-    'DELETE FROM todo_completions WHERE todo_id IN (SELECT id FROM todos WHERE person_id = ?)'
-  ).run(id)
-  db.prepare('DELETE FROM reactions WHERE person_id = ?').run(id)
-  db.prepare(
-    'DELETE FROM reactions WHERE todo_id IN (SELECT id FROM todos WHERE person_id = ?)'
-  ).run(id)
+  db.transaction(() => {
+    if (!getPerson(id)) return
+    const count = (db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n
+    if (count <= 1) throw new Error('Cannot delete the last profile.')
+    const ownedTasks = 'SELECT id FROM todos WHERE person_id = ? OR recur_parent IN (SELECT id FROM todos WHERE person_id = ?)'
+    // Remove dependent rows before deleting owned work and its generated children.
+    db.prepare('DELETE FROM todo_completions WHERE person_id = ?').run(id)
+    db.prepare(`DELETE FROM todo_completions WHERE todo_id IN (${ownedTasks})`).run(id, id)
+    db.prepare('DELETE FROM reactions WHERE person_id = ?').run(id)
+    db.prepare(`DELETE FROM reactions WHERE todo_id IN (${ownedTasks})`).run(id, id)
+    db.prepare(`DELETE FROM todos WHERE id IN (${ownedTasks})`).run(id, id)
+    db.prepare('DELETE FROM goals WHERE person_id = ?').run(id)
+    db.prepare('DELETE FROM events WHERE person_id = ? OR recur_parent IN (SELECT id FROM events WHERE person_id = ?)').run(id, id)
 
-  db.prepare('DELETE FROM todos WHERE person_id = ?').run(id)
-  db.prepare('DELETE FROM goals WHERE person_id = ?').run(id)
-  db.prepare('DELETE FROM events WHERE person_id = ?').run(id)
+    // Anything keyed to the deleted person must leave the workspace as well.
+    db.prepare('DELETE FROM presence WHERE person_id = ?').run(id)
+    db.prepare('DELETE FROM daily_notes WHERE person_id = ?').run(id)
+    db.prepare('DELETE FROM focus_sessions WHERE person_id = ?').run(id)
+    db.prepare('DELETE FROM nudges WHERE from_person = ? OR to_person = ?').run(id, id)
+    db.prepare('DELETE FROM focus_invites WHERE from_person = ? OR to_person = ?').run(id, id)
+    db.prepare('DELETE FROM settings WHERE key = ?').run(`caldav:${id}`)
+    db.prepare('DELETE FROM calendar_tombstones WHERE person_id = ?').run(id)
+    db.prepare('DELETE FROM calendar_resources WHERE person_id = ?').run(id)
+    db.prepare('DELETE FROM people WHERE id = ?').run(id)
 
-  // Anything else keyed to this person: leaving these behind kept a deleted
-  // profile alive in presence, focus stats and the nudge/invite queues.
-  db.prepare('DELETE FROM presence WHERE person_id = ?').run(id)
-  db.prepare('DELETE FROM daily_notes WHERE person_id = ?').run(id)
-  db.prepare('DELETE FROM focus_sessions WHERE person_id = ?').run(id)
-  db.prepare('DELETE FROM nudges WHERE from_person = ? OR to_person = ?').run(id, id)
-  db.prepare('DELETE FROM focus_invites WHERE from_person = ? OR to_person = ?').run(id, id)
+    // Preserve work belonging to someone else while removing dead references.
+    db.prepare('UPDATE todos SET goal_id = NULL WHERE goal_id IS NOT NULL AND goal_id NOT IN (SELECT id FROM goals)').run()
+    db.prepare('UPDATE focus_sessions SET task_id = NULL WHERE task_id IS NOT NULL AND task_id NOT IN (SELECT id FROM todos)').run()
+    recalculateSharedCompletions()
+  }).immediate()
+}
 
-  db.prepare('DELETE FROM people WHERE id = ?').run(id)
-
-  // A template owned by someone else could still point at a goal that just went
-  // away; clear those so they stop generating todos under a dead goal.
-  db.prepare(
-    "UPDATE todos SET goal_id = NULL WHERE goal_id IS NOT NULL AND goal_id NOT IN (SELECT id FROM goals)"
-  ).run()
+/** Membership changes alter shared completion only for work still in circulation. */
+function recalculateSharedCompletions(): void {
+  getDb().prepare(`
+    UPDATE todos SET completed_at = CASE
+      WHEN (SELECT COUNT(*) FROM todo_completions c JOIN people p ON p.id = c.person_id WHERE c.todo_id = todos.id)
+        >= (SELECT COUNT(*) FROM people)
+      THEN COALESCE(completed_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      ELSE NULL END
+    WHERE archived = 0 AND recurrence IS NULL AND goal_id IN (SELECT id FROM goals WHERE shared = 1)
+  `).run()
 }

@@ -10,7 +10,8 @@ import FocusStatsCard from '../components/FocusStatsCard'
 import QuickAdd from '../components/QuickAdd'
 import DailyNote from '../components/DailyNote'
 import { fmtDayLabel } from '../lib/format'
-import { playDing } from '../lib/audioFx'
+import { isTodoDoneForSelf } from '../lib/todoCompletion'
+import { useTodoCompletion } from '../lib/useTodoCompletion'
 
 export default function TodayView() {
   const { active, people, self, queryPersonId, defaultOwnerId, personById, tick } = useProfile()
@@ -25,49 +26,74 @@ export default function TodayView() {
   const [showEvent, setShowEvent] = useState(false)
   const [editEvent, setEditEvent] = useState<CalEvent | null>(null)
   const [editTodo, setEditTodo] = useState<TodoWithGoal | null>(null)
+  const completion = useTodoCompletion(self, people.map((p) => p.id))
+  const { guard, setError } = completion
 
   // Drag-to-reorder state
   const dragId = useRef<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
-    const day = await api.today()
-    setToday(day)
-    const loaded = await api.todos.today(day, queryPersonId)
-    setTodos(loaded)
-    setEvents(await api.events.day(day, queryPersonId))
-    // Load reactions for all loaded todos
-    if (loaded.length > 0) {
+    const request = guard.beginLoad()
+    try {
+      const day = await api.today()
+      const [loaded, loadedEvents] = await Promise.all([
+        api.todos.today(day, queryPersonId),
+        api.events.day(day, queryPersonId)
+      ])
+      if (!guard.isCurrent(request)) return
+      setToday(day)
+      setTodos(guard.applyPending(loaded))
+      setEvents(loadedEvents)
+      // Clear old reactions too when the new profile has no tasks.
       const allReactions = await Promise.all(loaded.map((t) => api.reactions.list(t.id)))
-      setReactions(allReactions.flat())
+      if (guard.isCurrent(request)) setReactions(allReactions.flat())
+    } catch (cause) {
+      if (guard.isCurrent(request)) setError(cause instanceof Error ? cause.message : 'Could not load today.')
     }
-  }, [queryPersonId, tick])
+  }, [queryPersonId, tick, guard, setError])
+  const latestLoad = useRef(load)
+  latestLoad.current = load
 
   useEffect(() => {
     load()
+    window.addEventListener('doneline:todos', load)
+    return () => { window.removeEventListener('doneline:todos', load) }
   }, [load])
 
-  async function toggle(id: string) {
-    const wasDone = todos.find((t) => t.id === id)?.completed_at !== null
-    await api.todos.toggle(id)
-    if (!wasDone) playDing()
-    load()
+  function toggle(id: string) {
+    const todo = todos.find((t) => t.id === id)
+    if (!todo) return
+    return completion.toggle(todo, (updated) => {
+      setTodos((prev) => prev.map((t) => t.id === updated.id ? updated : t))
+    }, () => latestLoad.current())
   }
 
   async function react(todoId: string, emoji: string) {
-    await api.reactions.toggle(todoId, emoji)
-    // Refresh just the reactions for this todo
-    const updated = await api.reactions.list(todoId)
-    setReactions((prev) => [...prev.filter((r) => r.todo_id !== todoId), ...updated])
+    try {
+      await api.reactions.toggle(todoId, emoji)
+      const updated = await api.reactions.list(todoId)
+      setReactions((prev) => [...prev.filter((r) => r.todo_id !== todoId), ...updated])
+    } catch {
+      setError('Could not save your reaction. Please try again.')
+    }
   }
 
   async function removeTodo(id: string) {
-    await api.todos.remove(id)
-    load()
+    try {
+      await api.todos.remove(id)
+      await latestLoad.current()
+    } catch {
+      setError('Could not delete this todo. Please try again.')
+    }
   }
   async function removeEvent(id: string) {
-    await api.events.remove(id)
-    load()
+    try {
+      await api.events.remove(id)
+      await latestLoad.current()
+    } catch {
+      setError('Could not delete this event. Please try again.')
+    }
   }
 
   // Drag-and-drop: compute new order and persist
@@ -86,13 +112,18 @@ export default function TodayView() {
     const [moved] = reordered.splice(fromIdx, 1)
     reordered.splice(toIdx, 0, moved)
     setTodos(reordered)
+    guard.invalidate()
 
     const updates = reordered.map((t, i) => ({ id: t.id, position: i }))
     api.todos.reorder(updates)
+      .catch(() => setError('Could not save the new order. Please try again.'))
+      .finally(() => { guard.invalidate(); void latestLoad.current() })
   }
 
   const reactionsFor = (todoId: string) => reactions.filter((r) => r.todo_id === todoId)
-  const openCount = todos.filter((t) => !t.completed_at).length
+  const openTodos = todos.filter((t) => !isTodoDoneForSelf(t, self))
+  const finishedTodos = todos.filter((t) => isTodoDoneForSelf(t, self))
+  const openCount = openTodos.length
 
   return (
     <div className="space-y-6">
@@ -138,7 +169,12 @@ export default function TodayView() {
       <div className="grid items-start gap-5 lg:grid-cols-3">
       <section className="card rise p-7 lg:col-span-2" style={{ animationDelay: '80ms' }}>
         <div className="mb-2 flex items-center justify-between">
-          <h2 className="text-2xl font-extrabold text-ink">Todo</h2>
+          <h2 className="flex items-center gap-2.5 text-2xl font-extrabold text-ink">
+            Todo
+            <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-bold tabular-nums text-slate-500" aria-label={`${openCount} todos left`}>
+              {openCount}
+            </span>
+          </h2>
           <button
             className="btn-soft py-2 text-sm"
             onClick={() => {
@@ -150,7 +186,8 @@ export default function TodayView() {
           </button>
         </div>
 
-        <QuickAdd onCreated={load} />
+        <QuickAdd onCreated={() => latestLoad.current()} />
+        {completion.error && <p role="alert" className="mt-2 text-sm font-semibold text-rose-ink">{completion.error}</p>}
 
         {todos.length === 0 ? (
           <div className="py-10 text-center">
@@ -165,29 +202,10 @@ export default function TodayView() {
             <p className="text-sm font-semibold text-slate-400">
               Everything on the list is done. Go enjoy it.
             </p>
-            <details className="mt-5 text-left">
-              <summary className="cursor-pointer text-center text-xs font-bold uppercase tracking-wide text-slate-400">
-                Show what you finished
-              </summary>
-              <div className="mt-2">
-                {todos.map((t) => (
-                  <TodoRow
-                    key={t.id}
-                    todo={t}
-                    onToggle={toggle}
-                    onDelete={removeTodo}
-                    onReact={react}
-                    reactions={reactionsFor(t.id)}
-                    showOwner={combined}
-                    onEdit={setEditTodo}
-                  />
-                ))}
-              </div>
-            </details>
           </div>
         ) : (
           <div>
-            {todos.map((t) => (
+            {openTodos.map((t) => (
               <TodoRow
                 key={t.id}
                 todo={t}
@@ -201,9 +219,25 @@ export default function TodayView() {
                 onDragEnter={() => setOverId(t.id)}
                 onDragEnd={handleDragEnd}
                 onEdit={setEditTodo}
+                pending={completion.pendingIds.has(t.id)}
               />
             ))}
           </div>
+        )}
+
+        {finishedTodos.length > 0 && (
+          <details className="mt-5">
+            <summary className="cursor-pointer text-xs font-bold text-slate-400">
+              Finished ({finishedTodos.length})
+            </summary>
+            <div className="mt-2">
+              {finishedTodos.map((t) => (
+                <TodoRow key={t.id} todo={t} onToggle={toggle} onDelete={removeTodo}
+                  onReact={react} reactions={reactionsFor(t.id)} showOwner={combined}
+                  onEdit={setEditTodo} pending={completion.pendingIds.has(t.id)} />
+              ))}
+            </div>
+          </details>
         )}
 
         <button
@@ -236,7 +270,7 @@ export default function TodayView() {
           setShowTodo(false)
           setEditTodo(null)
         }}
-        onCreated={load}
+        onCreated={() => latestLoad.current()}
         ownerId={defaultOwnerId}
         editTodo={editTodo}
       />
@@ -246,7 +280,7 @@ export default function TodayView() {
           setShowEvent(false)
           setEditEvent(null)
         }}
-        onCreated={load}
+        onCreated={() => latestLoad.current()}
         defaultDate={today}
         ownerId={defaultOwnerId}
         editEvent={editEvent}

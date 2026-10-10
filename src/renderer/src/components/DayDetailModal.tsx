@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Modal from './Modal'
 import { api } from '../api'
 import type { CalEvent, TodoWithGoal } from '../../../shared/api'
 import { useProfile } from '../profile'
-import { fmtTime, fmtDayLabel } from '../lib/format'
-import { playDing } from '../lib/audioFx'
+import { fmtTime, fmtDayLabel, localDateInput } from '../lib/format'
+import { localDay } from '../lib/calendarLayout'
+import { isTodoDoneForSelf } from '../lib/todoCompletion'
+import { useTodoCompletion } from '../lib/useTodoCompletion'
 
 interface Props {
   day: string | null // YYYY-MM-DD, null = closed
@@ -15,44 +17,106 @@ interface Props {
 }
 
 export default function DayDetailModal({ day, onClose, onAddEvent, onEditEvent, onChanged }: Props) {
-  const { queryPersonId, personById } = useProfile()
+  const { queryPersonId, personById, self, people, tick } = useProfile()
   const [events, setEvents] = useState<CalEvent[]>([])
   const [todos, setTodos] = useState<TodoWithGoal[]>([])
+  const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState('')
+  const [deleting, setDeleting] = useState<Set<string>>(new Set())
+  const deletingRef = useRef(new Set<string>())
+  const request = useRef(0)
+  const scope = `${day || ''}|${queryPersonId || ''}`
+  const currentScope = useRef(scope)
+  currentScope.current = scope
+  const previousScope = useRef('')
+  const changedRef = useRef(onChanged)
+  changedRef.current = onChanged
+  const completion = useTodoCompletion(self, people.map((person) => person.id))
+  const { guard } = completion
 
   const load = useCallback(async () => {
     if (!day) return
-    setEvents(await api.events.day(day, queryPersonId))
-    const all = await api.todos.list({ includeCompleted: true, personId: queryPersonId })
-    setTodos(all.filter((t) => t.due_at && t.due_at.slice(0, 10) === day))
-  }, [day, queryPersonId])
+    const token = ++request.current
+    const todoToken = guard.beginLoad()
+    setLoading(true)
+    setLoadError('')
+    try {
+      const [evs, all] = await Promise.all([
+        api.events.day(day, queryPersonId),
+        api.todos.today(day, queryPersonId)
+      ])
+      if (token !== request.current || scope !== currentScope.current) return
+      setEvents(evs.filter((event) => !deletingRef.current.has(event.id)))
+      if (guard.isCurrent(todoToken)) setTodos(guard.applyPending(all.filter((todo) => todo.due_at && localDateInput(new Date(todo.due_at)) === day)).filter((todo) => !deletingRef.current.has(todo.id)))
+    } catch (cause) {
+      if (token === request.current) setLoadError(cause instanceof Error ? cause.message : 'Could not load this day. Please try again.')
+    } finally { if (token === request.current) setLoading(false) }
+  }, [day, queryPersonId, tick, scope, guard])
+  const latestLoad = useRef(load)
+  latestLoad.current = load
 
   useEffect(() => {
-    load()
+    if (previousScope.current !== scope) { setEvents([]); setTodos([]) }
+    previousScope.current = scope
+    completion.setError('')
+    void load()
+    return () => { request.current++ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [load])
 
   async function delEvent(id: string) {
-    await api.events.remove(id)
-    load()
-    onChanged()
+    if (deletingRef.current.has(id)) return
+    deletingRef.current.add(id)
+    setDeleting(new Set(deletingRef.current))
+    const previous = events.find((event) => event.id === id)
+    request.current++
+    setEvents((rows) => rows.filter((event) => event.id !== id))
+    try { await api.events.remove(id) }
+    catch (cause) {
+      if (scope === currentScope.current) {
+        if (previous) setEvents((rows) => rows.some((event) => event.id === id) ? rows : [...rows, previous].sort((a, b) => a.starts_at.localeCompare(b.starts_at)))
+        setLoadError(cause instanceof Error ? cause.message : 'Could not remove this event.')
+      }
+    } finally {
+      deletingRef.current.delete(id)
+      setDeleting(new Set(deletingRef.current))
+      void latestLoad.current()
+      changedRef.current()
+    }
   }
   async function delTodo(id: string) {
-    await api.todos.remove(id)
-    load()
-    onChanged()
+    if (deletingRef.current.has(id) || completion.pendingIds.has(id)) return
+    deletingRef.current.add(id)
+    setDeleting(new Set(deletingRef.current))
+    const previous = todos.find((todo) => todo.id === id)
+    request.current++
+    setTodos((rows) => rows.filter((todo) => todo.id !== id))
+    try { await api.todos.remove(id) }
+    catch (cause) {
+      if (scope === currentScope.current) {
+        if (previous) setTodos((rows) => rows.some((todo) => todo.id === id) ? rows : [...rows, previous].sort((a, b) => a.position - b.position))
+        setLoadError(cause instanceof Error ? cause.message : 'Could not remove this todo.')
+      }
+    } finally {
+      deletingRef.current.delete(id)
+      setDeleting(new Set(deletingRef.current))
+      void latestLoad.current()
+      changedRef.current()
+    }
   }
-  async function toggleTodo(id: string) {
-    const wasDone = todos.find((t) => t.id === id)?.completed_at !== null
-    await api.todos.toggle(id)
-    if (!wasDone) playDing()
-    load()
-    onChanged()
+  function toggleTodo(todo: TodoWithGoal) {
+    void completion.toggle(todo, (updated) => {
+      if (scope === currentScope.current) setTodos((rows) => rows.map((row) => row.id === updated.id ? updated : row))
+    }, () => { changedRef.current(); return latestLoad.current() })
   }
 
   if (!day) return null
 
   return (
-    <Modal title={fmtDayLabel(day)} open={day !== null} onClose={onClose}>
+    <Modal title={fmtDayLabel(localDay(day).toISOString())} open={day !== null} onClose={onClose}>
       <div className="space-y-5">
+        {loading && <p role="status" className="text-xs font-semibold text-slate-400">Loading…</p>}
+        {(loadError || completion.error) && <p role="alert" className="text-sm font-semibold text-rose-ink">{loadError || completion.error}</p>}
         <div>
           <p className="mb-2 text-xs font-extrabold uppercase tracking-widest text-slate-400">Events</p>
           {events.length === 0 ? (
@@ -85,6 +149,7 @@ export default function DayDetailModal({ day, onClose, onAddEvent, onEditEvent, 
                         delEvent(e.id)
                       }}
                       aria-label="Delete event"
+                      disabled={deleting.has(e.id)}
                       className="rounded-full p-1.5 text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-ink group-hover:opacity-100"
                     >
                       <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
@@ -105,11 +170,12 @@ export default function DayDetailModal({ day, onClose, onAddEvent, onEditEvent, 
           ) : (
             <div className="space-y-1">
               {todos.map((t) => {
-                const done = t.completed_at !== null
+                const done = isTodoDoneForSelf(t, self)
                 return (
                   <div key={t.id} className="group flex items-center gap-3 py-1.5">
                     <button
-                      onClick={() => toggleTodo(t.id)}
+                      onClick={() => toggleTodo(t)}
+                      disabled={completion.pendingIds.has(t.id) || deleting.has(t.id) || (t.goal_shared === 1 && !self)}
                       aria-label={done ? 'Mark not done' : 'Mark done'}
                       className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition ${
                         done ? 'border-mint-ink bg-mint-ink text-white' : 'border-slate-300'
@@ -127,6 +193,7 @@ export default function DayDetailModal({ day, onClose, onAddEvent, onEditEvent, 
                     <button
                       onClick={() => delTodo(t.id)}
                       aria-label="Delete todo"
+                      disabled={completion.pendingIds.has(t.id) || deleting.has(t.id)}
                       className="rounded-full p-1.5 text-slate-400 opacity-0 transition hover:bg-rose-50 hover:text-rose-ink group-hover:opacity-100"
                     >
                       <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
