@@ -37,6 +37,8 @@ import {
   localDay,
   queueCalendarSync
 } from '../../core/index.js'
+import { ensureDailyBackup } from '../../core/backups.js'
+import { purgeTrash } from '../../core/trash.js'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -254,12 +256,18 @@ app.whenReady().then(async () => {
   if (!primaryInstance) return
   Menu.setApplicationMenu(null) // hide the default File/Edit/View/Window/Help bar
   await initDb() // open + (cloud) pull + migrate
+  try { purgeTrash(); ensureDailyBackup() }
+  catch (error) { console.error('[doneline] daily backup failed:', error) }
   try {
     runMaintenance() // generate recurring instances, archive + purge done todos
   } catch (err) {
     console.error('[doneline] maintenance failed:', err)
   }
-  registerIpc(() => startCloudSyncLoop())
+  registerIpc(() => {
+    startCloudSyncLoop()
+    try { purgeTrash(); ensureDailyBackup() }
+    catch (error) { console.error('[doneline] workspace backup failed:', error) }
+  })
   ipcMain.handle(CH.toggleFullscreen, () => {
     if (!mainWindow) return false
     const fs = !mainWindow.isFullScreen()
@@ -290,6 +298,8 @@ app.whenReady().then(async () => {
     try {
       const today = localDay()
       if (today !== maintainedDay) {
+        purgeTrash()
+        ensureDailyBackup()
         runMaintenance()
         maintainedDay = today
         void cloudSync().catch(() => {})

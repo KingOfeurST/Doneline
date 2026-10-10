@@ -1,9 +1,11 @@
 import { getDb } from './db.js'
+import { v5 as uuidv5 } from 'uuid'
 import { createEvent, updateEvent } from './events.js'
 import { parseICSOccurrences } from './ics.js'
 import { getCalDavConfig } from './settings.js'
 import type { CalEvent } from './types.js'
 import { assertCalendarRange, localCalendarDate } from './recurrenceRules.js'
+import { applyResourceChanges } from './calendarResourceChanges.js'
 
 export interface CalendarResource {
   person_id: string
@@ -11,6 +13,10 @@ export interface CalendarResource {
   url: string | null
   etag: string | null
   ics: string
+}
+
+export function remoteCalendarInstanceId(personId: string, uid: string, recurrenceId?: string | null): string {
+  return uuidv5(JSON.stringify(['doneline', 'caldav', personId, uid, recurrenceId ?? '']), uuidv5.URL)
 }
 
 export function calendarUrlContains(calendarUrl: string, objectUrl: string | null): boolean {
@@ -42,7 +48,7 @@ export function ensureRemoteCalendarInstancesForRange(from: string | Date, to: s
       if (tombstones.some((row) => !row.recurrence_id)) continue
       const excluded = new Set(tombstones.map((row) => row.recurrence_id))
       let occurrences
-      try { occurrences = parseICSOccurrences(resource.ics, from, to) } catch { continue }
+      try { occurrences = parseICSOccurrences(applyResourceChanges(resource), from, to) } catch { continue }
       const keys = new Set<string>()
       for (const event of occurrences) {
         const key = event.recurrenceId ?? ''
@@ -67,7 +73,9 @@ export function ensureRemoteCalendarInstancesForRange(from: string | Date, to: s
             changed++
           }
         } else {
-          createEvent({ ...fields, all_day: event.allDay, shared: event.shared })
+          const instanceId = remoteCalendarInstanceId(resource.person_id, event.uid, event.recurrenceId)
+          if (db.prepare('SELECT 1 FROM events WHERE id = ?').get(instanceId)) continue
+          createEvent({ ...fields, all_day: event.allDay, shared: event.shared }, { id: instanceId })
           changed++
         }
       }

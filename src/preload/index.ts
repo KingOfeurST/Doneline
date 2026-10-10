@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { CH, EVT } from '../shared/channels.js'
-import type { DonelineAPI, UpdateStatus } from '../shared/api.js'
+import type { DonelineAPI, UpdateStatus, WorkspaceSyncStatus } from '../shared/api.js'
 
 let prepareQuit: (() => Promise<void>) | null = null
 ipcRenderer.on(EVT.prepareQuit, async (_event, requestId: unknown) => {
@@ -29,6 +29,17 @@ const api: DonelineAPI = {
     set: (day, body, personId) => ipcRenderer.invoke(CH.notesSet, day, body, personId)
   },
 
+  search: { query: (input) => ipcRenderer.invoke(CH.searchQuery, input) },
+  data: {
+    listBackups: () => ipcRenderer.invoke(CH.dataListBackups),
+    createBackup: () => ipcRenderer.invoke(CH.dataCreateBackup),
+    restoreBackup: (id) => ipcRenderer.invoke(CH.dataRestoreBackup, id)
+  },
+  trash: {
+    list: (personId) => ipcRenderer.invoke(CH.trashList, personId),
+    restore: (id) => ipcRenderer.invoke(CH.trashRestore, id)
+  },
+
   people: {
     list: () => ipcRenderer.invoke(CH.peopleList),
     create: (input) => ipcRenderer.invoke(CH.personCreate, input),
@@ -46,6 +57,7 @@ const api: DonelineAPI = {
   todos: {
     list: (opts) => ipcRenderer.invoke(CH.todosList, opts),
     today: (day, personId) => ipcRenderer.invoke(CH.todosToday, day, personId),
+    planned: (day, personId) => ipcRenderer.invoke(CH.todosPlanned, day, personId),
     archived: (personId) => ipcRenderer.invoke(CH.todosArchived, personId),
     create: (input) => ipcRenderer.invoke(CH.todoCreate, input),
     update: (id, patch) => ipcRenderer.invoke(CH.todoUpdate, id, patch),
@@ -58,6 +70,8 @@ const api: DonelineAPI = {
   },
 
   events: {
+    seriesContext: (id) => ipcRenderer.invoke(CH.eventSeriesContext, id),
+    updateScoped: (id, patch, scope) => ipcRenderer.invoke(CH.eventUpdateScoped, id, patch, scope),
     templates: (opts) => ipcRenderer.invoke(CH.eventTemplates, opts),
     list: (opts) => ipcRenderer.invoke(CH.eventsList, opts),
     day: (day, personId) => ipcRenderer.invoke(CH.eventsDay, day, personId),
@@ -86,6 +100,12 @@ const api: DonelineAPI = {
     connect: (input) => ipcRenderer.invoke(CH.workspaceConnect, input),
     disconnect: () => ipcRenderer.invoke(CH.workspaceDisconnect),
     sync: () => ipcRenderer.invoke(CH.workspaceSync),
+    syncStatus: () => ipcRenderer.invoke(CH.workspaceSyncStatus),
+    onSyncStatus: (cb) => {
+      const handler = (_event: Electron.IpcRendererEvent, status: WorkspaceSyncStatus) => cb(status)
+      ipcRenderer.on(EVT.workspaceSyncStatus, handler)
+      return () => { ipcRenderer.removeListener(EVT.workspaceSyncStatus, handler) }
+    },
     onChanged: (cb) => {
       const handler = () => cb()
       ipcRenderer.on(EVT.workspaceChanged, handler)

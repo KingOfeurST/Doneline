@@ -6,7 +6,7 @@ import { PALETTE } from '../lib/colors'
 import { toISO, localDateInput, localTimeInput } from '../lib/format'
 import RecurrencePicker, { recurrenceError } from './RecurrencePicker'
 import { localDay, nextDay } from '../lib/calendarLayout'
-import type { Recurrence, CalEvent } from '../../../shared/api'
+import type { Recurrence, CalEvent, EventEditScope, EventSeriesContext } from '../../../shared/api'
 import { parseRecurrence } from '../../../../core/recurrenceRules'
 
 interface Props {
@@ -36,32 +36,68 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
   const [recurrence, setRecurrence] = useState<Recurrence | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [series, setSeries] = useState<EventSeriesContext | null>(null)
+  const [scope, setScope] = useState<EventEditScope>('occurrence')
+  const [loadingSeries, setLoadingSeries] = useState(false)
 
   const editing = !!editEvent
-  const editingRule = !!editEvent?.recurrence
-  const canEditRepeat = !editEvent?.recur_parent && !editEvent?.caldav_uid
+  const editingRule = !!editEvent?.recurrence || (!!series?.template && scope !== 'occurrence')
+  const canEditRepeat = !editEvent?.caldav_uid && (!editEvent?.recur_parent || scope !== 'occurrence')
+
+  function populate(event: CalEvent, rule: Recurrence | null) {
+    const s = new Date(event.starts_at)
+    const e = new Date(new Date(event.ends_at).getTime() - (event.all_day ? 1 : 0))
+    setTitle(event.title)
+    setOwner(event.shared === 1 ? SHARED : event.person_id)
+    setDate(localDateInput(s))
+    setEndDate(localDateInput(e) !== localDateInput(s) ? localDateInput(e) : '')
+    setStart(localTimeInput(s))
+    setEnd(localTimeInput(e))
+    setAllDay(event.all_day === 1)
+    setLocation(event.location ?? '')
+    setAttendees(event.attendees ?? '')
+    setColor(event.color || PALETTE[0].value)
+    setRecurrence(rule)
+  }
+
+  function chooseScope(next: EventEditScope) {
+    if (!editEvent || !series) return
+    setScope(next)
+    const basis = next === 'series' ? series.template || editEvent : editEvent
+    const rule = next === 'occurrence' ? null : next === 'future' && series.recurrence
+      ? { ...series.recurrence, startDate: localDateInput(new Date(editEvent.starts_at)) } : series.recurrence
+    // Choosing a scope keeps details already typed. Only the date anchor changes
+    // between the selected occurrence and the series' original start.
+    const s = new Date(basis.starts_at)
+    const e = new Date(new Date(basis.ends_at).getTime() - (basis.all_day ? 1 : 0))
+    setDate(localDateInput(s))
+    setEndDate(localDateInput(e) !== localDateInput(s) ? localDateInput(e) : '')
+    setRecurrence(rule)
+    setError('')
+  }
 
   useEffect(() => {
     if (!open) return
     setError('')
     setSaving(false)
+    setSeries(null)
+    setLoadingSeries(false)
+    setScope(editEvent?.recurrence ? 'series' : 'occurrence')
+    let cancelled = false
     if (editEvent) {
       const s = new Date(editEvent.starts_at)
-      // All-day ends are exclusive; the form shows the last included day.
-      const e = new Date(new Date(editEvent.ends_at).getTime() - (editEvent.all_day ? 1 : 0))
-      setTitle(editEvent.title)
-      setOwner(editEvent.shared === 1 ? SHARED : editEvent.person_id)
-      setDate(localDateInput(s))
-      setEndDate(localDateInput(e) !== localDateInput(s) ? localDateInput(e) : '')
-      setStart(localTimeInput(s))
-      setEnd(localTimeInput(e))
-      setAllDay(editEvent.all_day === 1)
-      setLocation(editEvent.location ?? '')
-      setAttendees(editEvent.attendees ?? '')
-      setColor(editEvent.color || PALETTE[0].value)
       const rule = parseRecurrence(editEvent.recurrence, localDateInput(s))
-      setRecurrence(rule)
+      populate(editEvent, rule)
       if (editEvent.recurrence && !rule) setError('The saved repeat rule is invalid. Choose a new schedule, or save without repeating to stop it.')
+      if (editEvent.recurrence || editEvent.recur_parent || editEvent.caldav_recurrence_id) {
+        setLoadingSeries(true)
+        api.events.seriesContext(editEvent.id).then((context) => {
+          if (cancelled) return
+          if (!context) throw new Error('This event no longer exists. Close and refresh the calendar.')
+          setSeries(context)
+        }).catch((cause) => { if (!cancelled) setError(cause instanceof Error ? cause.message : 'Could not load the repeating schedule.') })
+          .finally(() => { if (!cancelled) setLoadingSeries(false) })
+      }
     } else {
       setTitle('')
       setOwner(ownerId || people[0]?.id || '')
@@ -75,12 +111,13 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
       setColor(PALETTE[0].value)
       setRecurrence(null)
     }
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaultDate, editEvent])
 
   async function submit() {
     if (saving) return
-    const validation = recurrenceError(recurrence)
+    const validation = recurrenceError(canEditRepeat ? recurrence : null)
     if (!title.trim() || !date) { setError('Enter a title and an event date.'); return }
     if (endDate && endDate < date) { setError('The event end date must be on or after its start date.'); return }
     if (validation) { setError(validation); return }
@@ -105,7 +142,7 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
 
     try {
       if (editing && editEvent) {
-        await api.events.update(editEvent.id, {
+        const patch = {
         title: title.trim(),
         person_id,
         starts_at,
@@ -116,7 +153,9 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
         attendees: attendees || null,
         color,
         ...(canEditRepeat ? { recurrence: rec } : {})
-        })
+        }
+        if (series) await api.events.updateScoped(editEvent.id, patch, scope)
+        else await api.events.update(editEvent.id, patch)
       } else {
         await api.events.create({
         title: title.trim(),
@@ -140,9 +179,8 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
 
   return (
     <Modal title={editingRule ? 'Edit repeating event' : editing ? 'Edit event' : 'Add event'} open={open} onClose={() => { if (!saving) onClose() }}>
-      <fieldset disabled={saving} className="space-y-4">
-        {editEvent?.recur_parent && <p className="text-xs font-semibold text-slate-500">Changes apply to this occurrence. Use Repeating events to change the schedule.</p>}
-        {editEvent?.caldav_recurrence_id && <p className="text-xs font-semibold text-slate-500">Changes apply to this occurrence. Change the repeating schedule in Apple Calendar.</p>}
+      <fieldset disabled={saving || loadingSeries} className="space-y-4">
+        {loadingSeries && <p className="text-xs font-semibold text-slate-400">Loading repeating schedule…</p>}
         {error && <p role="alert" className="rounded-xl bg-rose-50 p-3 text-sm font-semibold text-rose-ink">{error}</p>}
         <input
           autoFocus
@@ -151,6 +189,13 @@ export default function AddEventModal({ open, onClose, onCreated, defaultDate, o
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
+
+        {series && series.scopes.length > 1 && <div>
+          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">Edit scope</p>
+          <div className="flex flex-wrap gap-x-4 gap-y-2">{([['occurrence', 'This occurrence'], ['future', 'This and future'], ['series', 'Entire series']] as const).filter(([value]) => series.scopes.includes(value)).map(([value, label]) =>
+            <label key={value} className="flex cursor-pointer items-center gap-1.5 text-xs font-semibold text-slate-600"><input type="radio" name="event-edit-scope" value={value} checked={scope === value} onChange={() => chooseScope(value)} className="h-4 w-4 accent-mint-ink" />{label}</label>)}</div>
+        </div>}
+        {series?.limitation && <p className="text-xs font-semibold text-slate-500">{series.limitation}</p>}
 
         <select className="input" value={owner} onChange={(e) => setOwner(e.target.value)}>
           {people.map((p) => (

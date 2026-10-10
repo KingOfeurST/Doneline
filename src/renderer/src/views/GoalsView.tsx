@@ -9,8 +9,9 @@ import GoalDetail from './GoalDetail'
 import { PALETTE } from '../lib/colors'
 import { isTodoDoneForSelf } from '../lib/todoCompletion'
 import { useTodoCompletion } from '../lib/useTodoCompletion'
+import { notifyDeleted } from '../lib/deletionUndo'
 
-export default function GoalsView() {
+export default function GoalsView({ initialGoal, onInitialGoalClosed }: { initialGoal?: Goal; onInitialGoalClosed?: () => void } = {}) {
   const { active, queryPersonId, defaultOwnerId, personById, tick, self, people } = useProfile()
   const combined = active === 'all'
   const [goals, setGoals] = useState<Goal[]>([])
@@ -20,7 +21,8 @@ export default function GoalsView() {
   const [color, setColor] = useState(PALETTE[0].value)
   const [shared, setShared] = useState(false)
   const [addTodoGoal, setAddTodoGoal] = useState<{ id: string; ownerId: string } | null>(null)
-  const [openGoalId, setOpenGoalId] = useState<string | null>(null)
+  const [openGoalId, setOpenGoalId] = useState<string | null>(initialGoal?.id || null)
+  useEffect(() => { if (initialGoal) setOpenGoalId(initialGoal.id) }, [initialGoal])
   const [editGoal, setEditGoal] = useState<Goal | null>(null)
   const [saving, setSaving] = useState(false)
   const savingRef = useRef(false)
@@ -31,7 +33,7 @@ export default function GoalsView() {
     const request = guard.beginLoad()
     try {
       const [loadedGoals, loadedTodos] = await Promise.all([
-        api.goals.list({ personId: queryPersonId }),
+        api.goals.list({ personId: queryPersonId, includeArchived: !!initialGoal }),
         api.todos.list({ includeCompleted: true, personId: queryPersonId })
       ])
       if (!guard.isCurrent(request)) return
@@ -40,7 +42,7 @@ export default function GoalsView() {
     } catch (cause) {
       if (guard.isCurrent(request)) setError(cause instanceof Error ? cause.message : 'Could not load goals.')
     }
-  }, [queryPersonId, tick, guard, setError])
+  }, [queryPersonId, tick, guard, setError, initialGoal])
   const latestLoad = useRef(load)
   latestLoad.current = load
 
@@ -112,14 +114,16 @@ export default function GoalsView() {
   }
   async function removeTodo(id: string) {
     try {
-      await api.todos.remove(id)
+      const receipt = await api.todos.remove(id)
+      notifyDeleted(receipt?.trashId, 'Task moved to Trash')
       await latestLoad.current()
     } catch {
       setError('Could not delete this todo. Please try again.')
     }
   }
 
-  const openGoal = goals.find((g) => g.id === openGoalId)
+  const openGoal = goals.find((g) => g.id === openGoalId) || (initialGoal?.id === openGoalId ? initialGoal : undefined)
+  function closeDetail() { setOpenGoalId(null); onInitialGoalClosed?.() }
 
   // Rendered in both branches: the detail page replaces the grid, so a modal
   // living only in the grid's JSX could never open from the detail page.
@@ -181,11 +185,11 @@ export default function GoalsView() {
       <>
         <GoalDetail
           goal={openGoal}
-          onBack={() => setOpenGoalId(null)}
+          onBack={closeDetail}
           onChanged={() => latestLoad.current()}
           onEdit={() => startEditGoal(openGoal)}
           onDelete={async () => {
-            if (await removeGoal(openGoal.id)) setOpenGoalId(null)
+            if (await removeGoal(openGoal.id)) closeDetail()
           }}
         />
         {goalModal}

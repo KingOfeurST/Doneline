@@ -6,6 +6,7 @@ import TodoRow from '../components/TodoRow'
 import AddTodoModal from '../components/AddTodoModal'
 import { isTodoDoneForSelf } from '../lib/todoCompletion'
 import { useTodoCompletion } from '../lib/useTodoCompletion'
+import { notifyDeleted } from '../lib/deletionUndo'
 
 interface Props {
   goal: Goal
@@ -98,7 +99,8 @@ export default function GoalDetail({ goal, onBack, onChanged, onEdit, onDelete }
   }
   async function remove(id: string) {
     try {
-      await api.todos.remove(id)
+      const receipt = await api.todos.remove(id)
+      notifyDeleted(receipt?.trashId, 'Task moved to Trash')
       await latestLoad.current()
       onChanged()
     } catch {

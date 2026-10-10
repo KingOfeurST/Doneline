@@ -7,6 +7,7 @@ import { fmtTime, fmtDayLabel, localDateInput } from '../lib/format'
 import { localDay } from '../lib/calendarLayout'
 import { isTodoDoneForSelf } from '../lib/todoCompletion'
 import { useTodoCompletion } from '../lib/useTodoCompletion'
+import { notifyDeleted } from '../lib/deletionUndo'
 
 interface Props {
   day: string | null // YYYY-MM-DD, null = closed
@@ -71,7 +72,7 @@ export default function DayDetailModal({ day, onClose, onAddEvent, onEditEvent, 
     const previous = events.find((event) => event.id === id)
     request.current++
     setEvents((rows) => rows.filter((event) => event.id !== id))
-    try { await api.events.remove(id) }
+    try { const result = await api.events.remove(id); notifyDeleted(result?.trashId, 'Event moved to Trash') }
     catch (cause) {
       if (scope === currentScope.current) {
         if (previous) setEvents((rows) => rows.some((event) => event.id === id) ? rows : [...rows, previous].sort((a, b) => a.starts_at.localeCompare(b.starts_at)))
@@ -91,7 +92,7 @@ export default function DayDetailModal({ day, onClose, onAddEvent, onEditEvent, 
     const previous = todos.find((todo) => todo.id === id)
     request.current++
     setTodos((rows) => rows.filter((todo) => todo.id !== id))
-    try { await api.todos.remove(id) }
+    try { const result = await api.todos.remove(id); notifyDeleted(result?.trashId, 'Task moved to Trash') }
     catch (cause) {
       if (scope === currentScope.current) {
         if (previous) setTodos((rows) => rows.some((todo) => todo.id === id) ? rows : [...rows, previous].sort((a, b) => a.position - b.position))

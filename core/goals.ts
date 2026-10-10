@@ -84,8 +84,9 @@ function deleteGoalInTransaction(id: string): void {
   const tplIds = (
     db.prepare('SELECT id FROM todos WHERE goal_id = ? ORDER BY recurrence IS NULL').all(id) as { id: string }[]
   ).map((r) => r.id)
+  db.prepare("DELETE FROM recurrence_exclusions WHERE kind = 'task' AND parent_id IN (SELECT id FROM todos WHERE goal_id = ?)").run(id)
   for (const tplId of tplIds) {
-    deleteTodo(tplId)
+    deleteTodo(tplId, { trash: false })
   }
   db.prepare('DELETE FROM goals WHERE id = ?').run(id)
 }

@@ -15,7 +15,19 @@ import type {
   DailyNote
 } from '../../core/index.js'
 import type { RemovalRange } from '../../core/rangeRemoval.js'
+import type { SearchInput, SearchResults } from '../../core/search.js'
+import type { WorkspaceSyncStatus } from '../../core/db.js'
+import type { BackupInfo } from '../../core/backups.js'
+import type { TrashItem, RestoreTrashResult } from '../../core/trash.js'
+import type { EventEditScope, EventSeriesContext, EventEditPatch } from '../../core/eventSeries.js'
 export type { RemovalRange } from '../../core/rangeRemoval.js'
+export type { SearchInput, SearchResults } from '../../core/search.js'
+export type { WorkspaceSyncStatus } from '../../core/db.js'
+export type { BackupInfo } from '../../core/backups.js'
+export type { TrashItem, RestoreTrashResult } from '../../core/trash.js'
+export type { EventEditScope, EventSeriesContext, EventEditPatch } from '../../core/eventSeries.js'
+
+export interface DeleteReceipt { trashId: string | null }
 
 export interface UpdateStatus {
   state: 'idle' | 'dev' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'installing' | 'error'
@@ -82,6 +94,18 @@ export interface DonelineAPI {
     set(day: string, body: string, personId?: string): Promise<DailyNote>
   }
 
+  search: { query(input: SearchInput): Promise<SearchResults> }
+
+  data: {
+    listBackups(): Promise<BackupInfo[]>
+    createBackup(): Promise<BackupInfo>
+    restoreBackup(id: string): Promise<{ safetyBackup: BackupInfo; restoredAt: string }>
+  }
+  trash: {
+    list(personId?: string): Promise<TrashItem[]>
+    restore(id: string): Promise<RestoreTrashResult>
+  }
+
   people: {
     list(): Promise<Person[]>
     create(input: { name: string; color?: string; emoji?: string }): Promise<Person>
@@ -99,19 +123,22 @@ export interface DonelineAPI {
   todos: {
     list(opts?: { includeCompleted?: boolean; personId?: string }): Promise<TodoWithGoal[]>
     today(day?: string, personId?: string): Promise<TodoWithGoal[]>
+    planned(day?: string, personId?: string): Promise<TodoWithGoal[]>
     archived(personId?: string): Promise<TodoWithGoal[]>
     create(input: { title: string; person_id?: string; goal_id?: string | null; notes?: string | null; due_at?: string | null; recurrence?: string | null }): Promise<TodoWithGoal>
     update(id: string, patch: Partial<Pick<Todo, 'title' | 'goal_id' | 'notes' | 'due_at' | 'position' | 'person_id' | 'recurrence'>>): Promise<TodoWithGoal | undefined>
     toggle(id: string, done?: boolean): Promise<TodoWithGoal | undefined>
-    remove(id: string): Promise<void>
+    remove(id: string): Promise<DeleteReceipt>
     reorder(updates: { id: string; position: number }[]): Promise<void>
     templates(): Promise<TodoWithGoal[]>
     /** Everything under one goal, archived included. */
     forGoal(goalId: string): Promise<{ open: TodoWithGoal[]; done: TodoWithGoal[]; templates: TodoWithGoal[] }>
-    removeTemplate(id: string): Promise<void>
+    removeTemplate(id: string): Promise<DeleteReceipt>
   }
 
   events: {
+    seriesContext(id: string): Promise<EventSeriesContext | undefined>
+    updateScoped(id: string, patch: EventEditPatch, scope: EventEditScope): Promise<CalEvent | undefined>
     templates(opts?: { personId?: string }): Promise<CalEvent[]>
     list(opts?: { from?: string; to?: string; personId?: string }): Promise<CalEvent[]>
     day(day?: string, personId?: string): Promise<CalEvent[]>
@@ -129,13 +156,13 @@ export interface DonelineAPI {
       recurrence?: string | null
     }): Promise<CalEvent>
     update(id: string, patch: Partial<Omit<CalEvent, 'id' | 'created_at'>>): Promise<CalEvent | undefined>
-    remove(id: string): Promise<void>
-    removeSeries(id: string): Promise<void>
+    remove(id: string): Promise<DeleteReceipt>
+    removeSeries(id: string): Promise<DeleteReceipt>
   }
 
   items: {
     previewRemoval(input: RemovalRange): Promise<{ events: CalEvent[]; todos: TodoWithGoal[] }>
-    removeRange(input: RemovalRange): Promise<{ events: number; todos: number }>
+    removeRange(input: RemovalRange): Promise<{ events: number; todos: number; trashIds?: string[] }>
   }
 
   /** Generate recurring instances, archive yesterday's done todos, purge old ones. */
@@ -213,6 +240,8 @@ export interface DonelineAPI {
     connect(input: { code?: string; syncUrl?: string; authToken?: string }): Promise<{ cloud: boolean; syncUrl: string; code: string }>
     disconnect(): Promise<{ cloud: boolean }>
     sync(): Promise<{ synced: boolean }>
+    syncStatus(): Promise<WorkspaceSyncStatus>
+    onSyncStatus(cb: (status: WorkspaceSyncStatus) => void): () => void
     /** Subscribe to background-sync updates. Returns an unsubscribe function. */
     onChanged(cb: () => void): () => void
   }

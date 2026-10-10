@@ -3,8 +3,9 @@ import { getDb } from './db.js'
 import { primaryPersonId } from './people.js'
 import type { Todo, TodoWithGoal } from './types.js'
 import { normalizeRecurrenceJson, localDateKey, parseLocalDate } from './recurrenceRules.js'
-import { excludeOccurrence } from './exclusions.js'
+import { excludeOccurrence, withEffectiveRecurrence } from './exclusions.js'
 import { itemTitle, timestamp } from './validation.js'
+import { captureDeletedItem } from './trash.js'
 
 const SELECT_WITH_GOAL = `
   SELECT t.*, g.title AS goal_title, g.color AS goal_color, g.shared AS goal_shared,
@@ -63,6 +64,13 @@ export function listTodayTodos(dayISO: string, personId?: string): TodoWithGoal[
   return getDb().prepare(sql).all(end.toISOString(), start.toISOString(), end.toISOString(), start.toISOString(), end.toISOString(), ...p.args) as TodoWithGoal[]
 }
 
+/** All remaining work for planning, including dated future instances. Finished
+ * work stays available for the collapsed section until it is archived. */
+export function listPlannedTodos(dayISO: string, personId?: string): TodoWithGoal[] {
+  parseLocalDate(dayISO)
+  return listTodos({ includeCompleted: true, personId })
+}
+
 /** Archived (done, swept) todos, newest first. */
 export function listArchivedTodos(personId?: string): TodoWithGoal[] {
   const p = personClause(personId)
@@ -96,20 +104,22 @@ export function listTodosForGoal(goalId: string): {
     done: rows
       .filter((t) => t.recurrence === null && t.completed_at !== null)
       .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? '')),
-    templates: rows.filter((t) => t.recurrence !== null)
+    templates: rows.filter((t) => t.recurrence !== null).map((row) => withEffectiveRecurrence('todos', row))
   }
 }
 
 /** Recurrence templates (the repeat rules), with owner and goal joined in so the
  *  settings list can show whose rule it is. */
 export function listTodoTemplates(): TodoWithGoal[] {
-  return getDb()
+  const rows = getDb()
     .prepare(`${SELECT_WITH_GOAL} WHERE t.recurrence IS NOT NULL ORDER BY t.created_at`)
     .all() as TodoWithGoal[]
+  return rows.map((row) => withEffectiveRecurrence('todos', row))
 }
 
 export function getTodo(id: string): TodoWithGoal | undefined {
-  return getDb().prepare(`${SELECT_WITH_GOAL} WHERE t.id = ?`).get(id) as TodoWithGoal | undefined
+  const row = getDb().prepare(`${SELECT_WITH_GOAL} WHERE t.id = ?`).get(id) as TodoWithGoal | undefined
+  return row ? withEffectiveRecurrence('todos', row) : undefined
 }
 
 export function createTodo(input: {
@@ -120,9 +130,9 @@ export function createTodo(input: {
   due_at?: string | null
   recurrence?: string | null
   recur_parent?: string | null
-}): TodoWithGoal {
+}, internal: { id?: string } = {}): TodoWithGoal {
   const db = getDb()
-  const id = uuid()
+  const id = internal.id ?? uuid()
   const owner = input.person_id || primaryPersonId()
   if (!db.prepare('SELECT 1 FROM people WHERE id = ?').get(owner)) throw new Error('This profile no longer exists.')
   if (input.goal_id && !db.prepare('SELECT 1 FROM goals WHERE id = ?').get(input.goal_id)) throw new Error('This goal no longer exists.')
@@ -276,17 +286,17 @@ function setTodoDoneInTransaction(id: string, done?: boolean, selfPersonId?: str
  * but completed ones are kept and simply detached: wiping them would erase the
  * archive and silently roll back the progress bar on any goal they counted for.
  */
-export function deleteTodo(id: string): void {
+export function deleteTodo(id: string, options: { trash?: boolean } = {}): string | null {
   const db = getDb()
-  const remove = () => deleteTodoInTransaction(id)
-  if (db.inTransaction) remove()
-  else db.transaction(remove).immediate()
+  const remove = () => deleteTodoInTransaction(id, options.trash !== false)
+  return db.inTransaction ? remove() : db.transaction(remove).immediate()
 }
 
-function deleteTodoInTransaction(id: string): void {
+function deleteTodoInTransaction(id: string, trash: boolean): string | null {
   const db = getDb()
   const todo = getTodo(id)
-  if (!todo) return
+  if (!todo) return null
+  const trashId = trash ? captureDeletedItem('task', id) : null
   if (todo.recur_parent && todo.due_at) excludeOccurrence('todos', todo.recur_parent, todo.due_at)
   db.prepare(`DELETE FROM reactions WHERE todo_id = ? OR todo_id IN
     (SELECT id FROM todos WHERE recur_parent = ? AND completed_at IS NULL
@@ -303,6 +313,7 @@ function deleteTodoInTransaction(id: string): void {
     (completed_at IS NOT NULL OR EXISTS (SELECT 1 FROM todo_completions c WHERE c.todo_id = todos.id))`).run(id)
   db.prepare('DELETE FROM todos WHERE recur_parent = ? AND completed_at IS NULL').run(id)
   db.prepare('DELETE FROM todos WHERE id = ?').run(id)
+  return trashId
 }
 
 /** Archive todos completed before `dayISO` (kept in DB, hidden from lists).

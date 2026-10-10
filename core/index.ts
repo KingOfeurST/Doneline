@@ -6,12 +6,17 @@ export * from './presence.js'
 export * from './focusStats.js'
 export * from './todos.js'
 export * from './events.js'
+export * from './eventSeries.js'
+export * from './exclusions.js'
 export * from './settings.js'
 export * from './caldav.js'
 export * from './calendarResources.js'
+export * from './calendarResourceChanges.js'
 export * from './reactions.js'
 export * from './notes.js'
 export * from './rangeRemoval.js'
+export * from './trash.js'
+export * from './backups.js'
 export {
   getSyncConfig,
   setSyncConfig,
@@ -30,7 +35,7 @@ export {
   DEFAULT_NOTIF_PREFS,
   type NotifPrefs
 } from './prefs.js'
-export { getDb, closeDb, initDb, reopenDb, cloudSync, isCloud, testWorkspace } from './db.js'
+export { getDb, closeDb, initDb, reopenDb, cloudSync, isCloud, testWorkspace, getWorkspaceSyncStatus, onWorkspaceSyncStatus, activeDbPath, type WorkspaceSyncStatus } from './db.js'
 export { dataDir, dbPath } from './paths.js'
 
 /** Local YYYY-MM-DD for "today" (or a given date). */

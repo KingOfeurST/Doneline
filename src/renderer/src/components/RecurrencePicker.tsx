@@ -1,6 +1,7 @@
 import type { Recurrence } from '../../../shared/api'
 import { localDateInput } from '../lib/format'
 import { localDay } from '../lib/calendarLayout'
+import { parseLocalDate, previewRecurrence } from '../../../../core/recurrenceRules'
 
 interface Props {
   value: Recurrence | null
@@ -16,7 +17,23 @@ export function recurrenceError(value: Recurrence | null): string | null {
   if (!value) return null
   if (value.freq === 'weekly' && !value.days?.length) return 'Choose at least one weekday.'
   if (value.startDate && value.endDate && value.endDate < value.startDate) return 'Repeat until must be on or after Repeat from.'
+  try {
+    if (value.startDate && value.endDate && previewRecurrence(value, value.startDate).total === 0) return 'This date range has no occurrences on the selected weekdays.'
+  } catch (cause) { return cause instanceof Error ? cause.message : 'Choose a valid repeat schedule.' }
   return null
+}
+
+export function RecurrencePreviewPanel({ value, anchorDate }: { value: Recurrence; anchorDate: string }) {
+  let preview: ReturnType<typeof previewRecurrence>
+  try { preview = previewRecurrence(value, anchorDate) } catch { return null }
+  const weekdays = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  const description = value.freq === 'daily' ? 'Every day' : value.days?.length === 1 ? `Every ${weekdays[value.days[0]]}` : `Every ${(value.days ?? []).map((day) => DAYS[day]).join(', ')}`
+  const formatter = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short' })
+  return <div aria-label="Recurrence preview" aria-live="polite" className="space-y-2 rounded-2xl bg-slate-50 p-3">
+    <p className="text-xs font-bold text-ink">{description} · {preview.total === null ? 'upcoming dates' : `${preview.total} occurrence${preview.total === 1 ? '' : 's'}`}</p>
+    <div className="flex flex-wrap gap-1.5">{preview.dates.map((day) => <span key={day} title={day} className="rounded-lg border border-slate-200/70 bg-white px-2 py-1 text-[11px] font-semibold text-slate-600">{formatter.format(parseLocalDate(day))}</span>)}</div>
+    {preview.hasMore && <p className="text-[11px] font-semibold text-slate-400">{preview.total === null ? 'Continues until you stop it or choose an end date.' : `+${preview.total - preview.dates.length} more dates`}</p>}
+  </div>
 }
 
 export default function RecurrencePicker({ value, onChange, defaultStartDate }: Props) {
@@ -81,6 +98,7 @@ export default function RecurrencePicker({ value, onChange, defaultStartDate }: 
           <p className="text-xs font-semibold text-slate-400">
             {value.endDate ? `Includes both dates.${mode === 'weekly' ? ' Only the selected weekdays repeat.' : ''}` : 'Repeats until you stop it or choose an end date.'}
           </p>
+          <RecurrencePreviewPanel value={{ ...value, startDate }} anchorDate={startDate} />
         </>
       )}
     </div>

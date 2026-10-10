@@ -3,8 +3,9 @@ import type { CalEvent } from '../../../shared/api'
 import { api } from '../api'
 import { useProfile } from '../profile'
 import Modal from './Modal'
-import { parseRecurrence } from '../../../../core/recurrenceRules'
+import { parseRecurrence, previewRecurrence } from '../../../../core/recurrenceRules'
 import { localDateInput } from '../lib/format'
+import { notifyDeleted } from '../lib/deletionUndo'
 
 interface Props {
   open: boolean
@@ -17,7 +18,9 @@ function describeRule(event: CalEvent): string {
   const rule = parseRecurrence(event.recurrence, localDateInput(new Date(event.starts_at)))
   if (rule) {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    return `${rule.freq === 'daily' ? 'Every day' : (rule.days || []).map((day) => days[day]).join(', ')}${rule.startDate ? ` · from ${rule.startDate}` : ''}${rule.endDate ? ` through ${rule.endDate}` : ''}`
+    let count = ''
+    try { const preview = previewRecurrence(rule, localDateInput(new Date(event.starts_at))); if (preview.total !== null) count = ` · ${preview.total} occurrences` } catch { /* Existing invalid ranges remain repairable. */ }
+    return `${rule.freq === 'daily' ? 'Every day' : (rule.days || []).map((day) => days[day]).join(', ')}${rule.startDate ? ` · from ${rule.startDate}` : ''}${rule.endDate ? ` through ${rule.endDate}` : ''}${count}`
   }
   return 'Edit to repair the repeat schedule'
 }
@@ -54,7 +57,8 @@ export default function RepeatingEventsModal({ open, onClose, onEdit, onChanged 
     setBusy(true)
     setError('')
     try {
-      await api.events.removeSeries(selected.id)
+      const result = await api.events.removeSeries(selected.id)
+      notifyDeleted(result?.trashId, 'Repeating events moved to Trash')
       setEvents((rows) => rows.filter((event) => event.id !== selected.id))
       setSelected(null)
       onChanged()

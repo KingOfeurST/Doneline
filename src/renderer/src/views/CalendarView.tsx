@@ -19,7 +19,7 @@ import DayDetailModal from '../components/DayDetailModal'
 import RangeRemovalModal from '../components/RangeRemovalModal'
 import RepeatingEventsModal from '../components/RepeatingEventsModal'
 import { localDateInput, fmtTime } from '../lib/format'
-import { eventOverlapsDay, layoutTimedEvents, nextDay } from '../lib/calendarLayout'
+import { eventOverlapsDay, layoutTimedEvents, nextDay, localDay } from '../lib/calendarLayout'
 
 type Mode = 'month' | 'week' | 'hour-grid'
 
@@ -27,10 +27,10 @@ const HOUR_START = 0
 const HOUR_END = 24
 const HOUR_HEIGHT = 64 // px per hour
 
-export default function CalendarView() {
+export default function CalendarView({ initialDay }: { initialDay?: string } = {}) {
   const { active, queryPersonId, defaultOwnerId, personById, tick } = useProfile()
   const combined = active === 'all'
-  const [cursor, setCursor] = useState(new Date())
+  const [cursor, setCursor] = useState(() => initialDay ? localDay(initialDay) : new Date())
   const [mode, setMode] = useState<Mode>('month')
   const [events, setEvents] = useState<CalEvent[]>([])
   const [showEvent, setShowEvent] = useState(false)
@@ -43,6 +43,7 @@ export default function CalendarView() {
   const [loading, setLoading] = useState(false)
   const loadRequest = useRef(0)
   const gridRef = useRef<HTMLDivElement>(null)
+  useEffect(() => { if (initialDay) setCursor(localDay(initialDay)) }, [initialDay])
 
   const range = useMemo(() => {
     if (mode === 'week' || mode === 'hour-grid') {
@@ -77,6 +78,10 @@ export default function CalendarView() {
   const latestLoad = useRef(load)
   latestLoad.current = load
   const refresh = useCallback(() => latestLoad.current(), [])
+  useEffect(() => {
+    window.addEventListener('doneline:events', refresh)
+    return () => window.removeEventListener('doneline:events', refresh)
+  }, [refresh])
 
   useEffect(() => {
     if (previousScope.current !== scope) setEvents([])

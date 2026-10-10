@@ -59,6 +59,10 @@ export function deletePerson(id: string): void {
     const count = (db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n
     if (count <= 1) throw new Error('Cannot delete the last profile.')
     const ownedTasks = 'SELECT id FROM todos WHERE person_id = ? OR recur_parent IN (SELECT id FROM todos WHERE person_id = ?)'
+    db.prepare(`DELETE FROM recurrence_exclusions WHERE
+      (kind = 'task' AND parent_id IN (${ownedTasks} UNION SELECT item_id FROM trash_items WHERE kind = 'task' AND person_id = ?)) OR
+      (kind = 'event' AND parent_id IN (SELECT id FROM events WHERE person_id = ? OR recur_parent IN (SELECT id FROM events WHERE person_id = ?)
+        UNION SELECT item_id FROM trash_items WHERE kind = 'event' AND person_id = ?))`).run(id, id, id, id, id, id)
     // Remove dependent rows before deleting owned work and its generated children.
     db.prepare('DELETE FROM todo_completions WHERE person_id = ?').run(id)
     db.prepare(`DELETE FROM todo_completions WHERE todo_id IN (${ownedTasks})`).run(id, id)
@@ -77,6 +81,8 @@ export function deletePerson(id: string): void {
     db.prepare('DELETE FROM settings WHERE key = ?').run(`caldav:${id}`)
     db.prepare('DELETE FROM calendar_tombstones WHERE person_id = ?').run(id)
     db.prepare('DELETE FROM calendar_resources WHERE person_id = ?').run(id)
+    db.prepare('DELETE FROM calendar_resource_changes WHERE person_id = ?').run(id)
+    db.prepare('DELETE FROM trash_items WHERE person_id = ?').run(id)
     db.prepare('DELETE FROM people WHERE id = ?').run(id)
 
     // Preserve work belonging to someone else while removing dead references.

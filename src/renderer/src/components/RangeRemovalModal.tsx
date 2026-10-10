@@ -4,6 +4,7 @@ import { api } from '../api'
 import { useProfile } from '../profile'
 import { fmtTime, localDateInput } from '../lib/format'
 import Modal from './Modal'
+import { notifyDeleted } from '../lib/deletionUndo'
 
 interface Props {
   open: boolean
@@ -73,6 +74,7 @@ export default function RangeRemovalModal({ open, onClose, onRemoved, fromDay, t
     try {
       const expectedIds = [...matches.events.map((event) => `events:${event.id}`), ...matches.todos.map((todo) => `todos:${todo.id}`)]
       const result = await api.items.removeRange({ ...input, expectedIds })
+      notifyDeleted(result.trashIds, 'Items moved to Trash')
       setPreview(null)
       setPreviewKey('')
       setMessage(`Removed ${result.events} event${result.events === 1 ? '' : 's'} and ${result.todos} todo${result.todos === 1 ? '' : 's'}.`)

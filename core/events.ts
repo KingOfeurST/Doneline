@@ -4,9 +4,10 @@ import { primaryPersonId } from './people.js'
 import type { CalEvent } from './types.js'
 import { ensureEventInstancesForRange } from './recurrence.js'
 import { normalizeRecurrenceJson, localDateKey, parseLocalDate, calendarDayDifference } from './recurrenceRules.js'
-import { excludeOccurrence } from './exclusions.js'
+import { excludeOccurrence, withEffectiveRecurrence } from './exclusions.js'
 import { eventTimes, itemTitle, timestamp } from './validation.js'
 import { ensureRemoteCalendarInstancesForRange } from './calendarResources.js'
+import { captureDeletedItem } from './trash.js'
 
 function recordRemoteDelete(event: CalEvent): void {
   if (!event.caldav_uid) return
@@ -69,13 +70,15 @@ export function listDayEvents(dayISO: string, personId?: string): CalEvent[] {
 }
 
 export function getEvent(id: string): CalEvent | undefined {
-  return getDb().prepare('SELECT * FROM events WHERE id = ?').get(id) as CalEvent | undefined
+  const row = getDb().prepare('SELECT * FROM events WHERE id = ?').get(id) as CalEvent | undefined
+  return row ? withEffectiveRecurrence('events', row) : undefined
 }
 
 export function listEventTemplates(opts: { personId?: string } = {}): CalEvent[] {
-  return getDb()
+  const rows = getDb()
     .prepare(`SELECT * FROM events WHERE recurrence IS NOT NULL${opts.personId && opts.personId !== 'all' ? ' AND (person_id = ? OR shared = 1)' : ''} ORDER BY created_at`)
     .all(...(opts.personId && opts.personId !== 'all' ? [opts.personId] : [])) as CalEvent[]
+  return rows.map((row) => withEffectiveRecurrence('events', row))
 }
 
 export function createEvent(input: {
@@ -96,9 +99,9 @@ export function createEvent(input: {
   recurrence?: string | null
   recur_parent?: string | null
   source?: 'local' | 'caldav'
-}): CalEvent {
+}, internal: { id?: string } = {}): CalEvent {
   const db = getDb()
-  const id = uuid()
+  const id = internal.id ?? uuid()
   const owner = input.person_id || primaryPersonId()
   if (!db.prepare('SELECT 1 FROM people WHERE id = ?').get(owner)) throw new Error('This profile no longer exists.')
   const times = eventTimes(input.starts_at, input.ends_at, !!input.all_day)
@@ -133,16 +136,18 @@ export function createEvent(input: {
 
 export function updateEvent(
   id: string,
-  patch: Partial<Omit<CalEvent, 'id' | 'created_at'>>
+  patch: Partial<Omit<CalEvent, 'id' | 'created_at'>>,
+  internal: { regenerateChildren?: boolean; detachOccurrence?: boolean } = {}
 ): CalEvent | undefined {
   const db = getDb()
-  const update = () => updateEventInTransaction(id, patch)
+  const update = () => updateEventInTransaction(id, patch, internal)
   return db.inTransaction ? update() : db.transaction(update).immediate()
 }
 
 function updateEventInTransaction(
   id: string,
-  patch: Partial<Omit<CalEvent, 'id' | 'created_at'>>
+  patch: Partial<Omit<CalEvent, 'id' | 'created_at'>>,
+  internal: { regenerateChildren?: boolean; detachOccurrence?: boolean }
 ): CalEvent | undefined {
   const cur = getEvent(id)
   if (!cur) return undefined
@@ -175,11 +180,11 @@ function updateEventInTransaction(
   const contentChanged = ['title', 'starts_at', 'ends_at', 'all_day', 'location', 'notes', 'person_id', 'attendees', 'color', 'shared'].some((key) =>
     key in patch && patch[key as keyof typeof patch] !== cur[key as keyof CalEvent]
   )
-  if (cur.recur_parent && contentChanged) {
+  if (cur.recur_parent && contentChanged && internal.detachOccurrence !== false) {
     excludeOccurrence('events', cur.recur_parent, cur.starts_at)
     m.recur_parent = null // An edited occurrence is an exception to its rule.
   }
-  if (cur.recurrence && (contentChanged || 'recurrence' in patch || 'shared' in patch || 'color' in patch || 'attendees' in patch)) {
+  if (internal.regenerateChildren !== false && cur.recurrence && (contentChanged || 'recurrence' in patch || 'shared' in patch || 'color' in patch || 'attendees' in patch)) {
     const midnight = new Date(); midnight.setHours(0, 0, 0, 0)
     const children = getDb().prepare('SELECT * FROM events WHERE recur_parent = ? AND starts_at >= ?').all(id, midnight.toISOString()) as CalEvent[]
     for (const child of children) recordRemoteDelete(child)
@@ -219,21 +224,26 @@ function updateEventInTransaction(
   return getEvent(id)
 }
 
-export function deleteEvent(id: string): void {
+export function deleteEvent(id: string, options: { trash?: boolean } = {}): string | null {
   const db = getDb()
-  const remove = () => deleteEventInTransaction(id)
-  if (db.inTransaction) remove()
-  else db.transaction(remove).immediate()
+  const remove = () => deleteEventInTransaction(id, options.trash !== false)
+  return db.inTransaction ? remove() : db.transaction(remove).immediate()
 }
 
-function deleteEventInTransaction(id: string): void {
+function deleteEventInTransaction(id: string, trash: boolean): string | null {
   const event = getEvent(id)
-  if (!event) return
+  if (!event) return null
+  const trashId = trash ? captureDeletedItem('event', id) : null
   if (event.recur_parent) excludeOccurrence('events', event.recur_parent, event.starts_at)
   const removed = getDb().prepare('SELECT * FROM events WHERE id = ? OR recur_parent = ?').all(id, id) as CalEvent[]
   for (const row of removed) recordRemoteDelete(row)
+  // Obsolete whole-resource commands must not recreate an event after deletion.
+  for (const row of removed) if (row.caldav_uid && !row.caldav_recurrence_id) {
+    getDb().prepare('DELETE FROM calendar_resource_changes WHERE person_id = ? AND uid = ?').run(row.person_id, row.caldav_uid)
+  }
   // Deleting a template removes its generated instances too.
   getDb().prepare('DELETE FROM events WHERE id = ? OR recur_parent = ?').run(id, id)
+  return trashId
 }
 
 /** Find a synced event by its CalDAV UID, scoped to one person's calendar. */

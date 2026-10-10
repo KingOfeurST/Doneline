@@ -8,6 +8,9 @@ import { isMuted, setMuted, playDing } from '../lib/audioFx'
 import { localDateInput, parseCreatedAt } from '../lib/format'
 import { KeyedSerialQueue } from '../lib/serialQueue'
 import { useTodoCompletion } from '../lib/useTodoCompletion'
+import YourDataSection from '../components/YourDataSection'
+import { notifyDeleted } from '../lib/deletionUndo'
+import { flushPendingNotes } from '../lib/notePersistence'
 
 const DEFAULT_SERVER = 'https://caldav.icloud.com'
 const EMOJIS = ['🙂', '🧑', '👩', '👨', '🐱', '🐶', '🌟', '🦊', '🐻', '🦄']
@@ -19,6 +22,7 @@ export default function SettingsView() {
     <div className="mx-auto max-w-2xl space-y-6">
       <h1 className="text-3xl font-extrabold text-ink">Settings</h1>
       <WorkspaceSection />
+      <YourDataSection />
       <NotificationsSection />
       <FocusTargetSection />
       <SoundsSection />
@@ -341,7 +345,8 @@ function RecurringTasksSection() {
     setBusy(true)
     setError('')
     try {
-      await api.todos.removeTemplate(id)
+      const receipt = await api.todos.removeTemplate(id)
+      notifyDeleted(receipt?.trashId, 'Repeating task moved to Trash')
       if (editing === id) setEditing(null)
       await load()
     } catch (cause) {
@@ -538,7 +543,7 @@ function ArchiveSection() {
 
 /* ----------------------------- Workspace ------------------------------ */
 
-function WorkspaceSection() {
+export function WorkspaceSection() {
   const [status, setStatus] = useState<WorkspaceStatus | null>(null)
   const [url, setUrl] = useState('') // Turso database URL (libsql://…)
   const [token, setToken] = useState('') // Turso auth token
@@ -578,6 +583,7 @@ function WorkspaceSection() {
         url.trim() && token.trim()
           ? { syncUrl: url.trim(), authToken: token.trim() }
           : { code: code.trim() }
+      await flushPendingNotes()
       await api.workspace.connect(input)
       // Full refresh so every view reloads from the shared workspace.
       window.location.reload()
@@ -595,6 +601,7 @@ function WorkspaceSection() {
     busyRef.current = true
     setBusy(true)
     try {
+      await flushPendingNotes()
       await api.workspace.disconnect()
       window.location.reload()
     } catch (e) {

@@ -113,6 +113,34 @@ export function recurrenceMatchesDate(rule: Recurrence, day: Date): boolean {
   return rule.freq === 'daily' || (rule.freq === 'weekly' && !!rule.days?.includes(day.getDay()))
 }
 
+export interface RecurrencePreview {
+  /** Exact dated occurrences, limited only for display. */
+  dates: string[]
+  /** Null means the rule has no end date. */
+  total: number | null
+  hasMore: boolean
+}
+
+/** Use the same matching rules as materialization; preview never creates rows. */
+export function previewRecurrence(value: Recurrence, anchorDate: string, options: { limit?: number } = {}): RecurrencePreview {
+  const rule = normalizeRecurrence(value, anchorDate)
+  const first = parseLocalDate(rule.startDate ?? anchorDate)
+  const limit = options.limit ?? 12
+  if (!Number.isInteger(limit) || limit < 1 || limit > 3661) throw new Error('Choose a preview limit between 1 and 3661.')
+  const last = rule.endDate ? parseLocalDate(rule.endDate) : new Date(first)
+  if (!rule.endDate) last.setDate(last.getDate() + 3660)
+  assertCalendarRange(first, last)
+  const dates: string[] = []
+  let total = 0
+  for (let day = new Date(first); day <= last; day.setDate(day.getDate() + 1)) {
+    if (!recurrenceMatchesDate(rule, day)) continue
+    total++
+    if (dates.length < limit) dates.push(localDateKey(day))
+    if (!rule.endDate && total > limit) break
+  }
+  return { dates, total: rule.endDate ? total : null, hasMore: rule.endDate ? total > dates.length : total > limit }
+}
+
 /** Repeat wall-clock times and calendar-day duration across DST transitions. */
 export function occurrenceTimes(templateStart: Date, templateEnd: Date, day: Date): { start: Date; end: Date } {
   if (!Number.isFinite(templateStart.getTime()) || !Number.isFinite(templateEnd.getTime()) ||

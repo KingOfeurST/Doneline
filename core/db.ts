@@ -1,26 +1,51 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import Database from 'libsql'
-import { v4 as uuid } from 'uuid'
+import { v4 as uuid, v5 as stableUuid } from 'uuid'
+import { createHash } from 'node:crypto'
 import { dataDir, dbPath } from './paths.js'
-import { getSyncConfig } from './config.js'
+import { getSyncConfig, type SyncConfig } from './config.js'
+import { installSyncJournal, pendingSyncChanges, remoteTransaction, syncOfflineWorkspace } from './offlineSync.js'
+import { backfillRecurrenceExclusions } from './exclusions.js'
 
 type DB = InstanceType<typeof Database>
 
-// libsql's bundled types know `syncUrl` but omit `authToken` (valid at runtime
-// for embedded replicas), so widen the options type here.
-type ReplicaOptions = Database.Options & { authToken?: string }
-
 let _db: DB | null = null
 let _cloud = false
+let _openedPath: string | null = null
+let _openedSyncConfig: SyncConfig | null = null
 let _syncInFlight: Promise<boolean> | null = null
 let _initInFlight: Promise<void> | null = null
 let _initialized = false
 let _syncRequested = false
+let _lastSyncError: string | null = null
+let _syncing = false
+const syncListeners = new Set<(status: WorkspaceSyncStatus) => void>()
+
+export interface WorkspaceSyncStatus {
+  state: 'local' | 'pending' | 'syncing' | 'synced' | 'offline' | 'error'
+  cloud: boolean
+  pending: number
+  lastSyncedAt: string | null
+  message?: string
+}
 
 /** Cloud mode uses a separate replica file so it never clashes with a plain
  *  local database created during offline use. */
 const replicaPath = () => path.join(dataDir(), 'doneline-replica.db')
+function defaultProfileIds(): [string, string] {
+  const cfg = _cloud ? _openedSyncConfig : null
+  if (!cfg) return [uuid(), uuid()]
+  const workspace = cfg.syncUrl.replace(/\/$/, '').toLowerCase()
+  return [stableUuid(`doneline:${workspace}:me`, stableUuid.URL), stableUuid(`doneline:${workspace}:friend`, stableUuid.URL)]
+}
+function configuredDbPath(cfg = getSyncConfig()): string {
+  if (!cfg) return dbPath()
+  const hash = createHash('sha256').update(cfg.syncUrl.replace(/\/$/, '').toLowerCase()).digest('hex').slice(0, 20)
+  return path.join(dataDir(), `doneline-workspace-${hash}.db`)
+}
+/** Config changes precede async reopening; backups must still name the open DB. */
+export const activeDbPath = () => _db && _openedPath ? _openedPath : configuredDbPath()
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS people (
@@ -159,6 +184,32 @@ CREATE TABLE IF NOT EXISTS calendar_resources (
   ics TEXT NOT NULL,
   PRIMARY KEY (person_id, uid)
 );
+CREATE TABLE IF NOT EXISTS calendar_resource_changes (
+  id TEXT PRIMARY KEY,
+  person_id TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  url TEXT,
+  patch TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS trash_items (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('task','event')),
+  item_id TEXT NOT NULL,
+  person_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  deleted_at TEXT NOT NULL,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_trash_deleted ON trash_items(deleted_at);
+
+CREATE TABLE IF NOT EXISTS recurrence_exclusions (
+  kind TEXT NOT NULL CHECK(kind IN ('task','event')),
+  parent_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  excluded INTEGER NOT NULL CHECK(excluded IN (0,1)),
+  PRIMARY KEY(kind,parent_id,day)
+);
 `
 
 /** Add a column if it isn't already present (idempotent migration helper). */
@@ -169,7 +220,7 @@ function ensureColumn(db: DB, table: string, column: string, definition: string)
   }
 }
 
-function migrate(db: DB): void {
+function migrate(db: DB, seed = true): void {
   // person_id was added after the first release — backfill existing rows.
   ensureColumn(db, 'todos', 'person_id', 'TEXT')
   ensureColumn(db, 'goals', 'person_id', 'TEXT')
@@ -193,15 +244,15 @@ function migrate(db: DB): void {
   ensureColumn(db, 'events', 'shared', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn(db, 'events', 'calendar_dirty', 'INTEGER NOT NULL DEFAULT 0')
   ensureColumn(db, 'events', 'caldav_recurrence_id', 'TEXT')
+  ensureColumn(db, 'events', 'calendar_restore', 'INTEGER NOT NULL DEFAULT 0')
 
   // v4: nudge kind — 'message' (text) or 'buzz' (window shake).
   ensureColumn(db, 'nudges', 'kind', "TEXT NOT NULL DEFAULT 'message'")
 
   // Seed the two default people if the table is empty.
   const count = (db.prepare('SELECT COUNT(*) AS n FROM people').get() as { n: number }).n
-  if (count === 0) {
-    const me = uuid()
-    const friend = uuid()
+  if (count === 0 && seed) {
+    const [me, friend] = defaultProfileIds()
     const insert = db.prepare(
       'INSERT INTO people (id, name, color, emoji, position) VALUES (?, ?, ?, ?, ?)'
     )
@@ -247,17 +298,28 @@ function migrate(db: DB): void {
 
 function openConnection(): DB {
   const cfg = getSyncConfig()
-  if (cfg) {
-    _cloud = true
-    // Embedded replica: local file kept in sync with the shared Turso database.
-    const opts: ReplicaOptions = { syncUrl: cfg.syncUrl, authToken: cfg.authToken }
-    return new Database(replicaPath(), opts)
+  _cloud = !!cfg
+  const target = configuredDbPath(cfg)
+  // Import the previous read replica without changing it. VACUUM reads a
+  // consistent SQLite snapshot, including committed WAL data, into our new file.
+  if (cfg && !fs.existsSync(target) && fs.existsSync(replicaPath()) && !fs.readdirSync(dataDir()).some((name) => /^doneline-workspace-.*\.db$/.test(name))) {
+    const importing = `${target}.importing-${uuid()}`
+    const cached = new Database(replicaPath())
+    try {
+      cached.prepare('VACUUM INTO ?').run(importing)
+      // Publish a fully committed snapshot atomically without replacing a file
+      // that another desktop/MCP process has already opened and edited.
+      try { fs.linkSync(importing, target) }
+      catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause }
+    } finally { cached.close(); fs.rmSync(importing, { force: true }) }
   }
-  _cloud = false
-  return new Database(dbPath())
+  const connection = new Database(target)
+  _openedPath = target
+  _openedSyncConfig = cfg ? { ...cfg } : null
+  return connection
 }
 
-function applySchema(db: DB): void {
+function applySchema(db: DB, seed = true): void {
   try { db.pragma('busy_timeout = 5000') } catch { /* replica may not support it */ }
   // Pragmas can be rejected by replica connections — never let that be fatal.
   try {
@@ -272,7 +334,7 @@ function applySchema(db: DB): void {
   }
   db.exec(SCHEMA)
   // Desktop and MCP can initialize together; migration/seeding is one write.
-  db.transaction(() => migrate(db)).immediate()
+  db.transaction(() => migrate(db, seed)).immediate()
 }
 
 /**
@@ -282,19 +344,36 @@ function applySchema(db: DB): void {
  */
 async function initialize(): Promise<void> {
   if (!_db) _db = openConnection()
+  applySchema(_db, !_cloud)
   if (_cloud) {
-    try {
-      await _db.sync()
-    } catch (err) {
-      console.error('[doneline] initial cloud sync failed:', err)
-    }
-  }
-  applySchema(_db)
-  if (_cloud) {
-    try {
-      await _db.sync()
-    } catch (err) {
-      console.error('[doneline] post-setup cloud sync failed:', err)
+    installSyncJournal(_db)
+    backfillRecurrenceExclusions(_db)
+    const cached = !!_db.prepare('SELECT 1 FROM people LIMIT 1').get()
+    if (!cached) {
+      // First connection needs a workspace snapshot. Established workspaces
+      // reopen entirely from disk and never wait on the network to launch.
+      let synchronized = await cloudSync()
+      const waitDeadline = Date.now() + 30_000
+      while (!synchronized && !_db.prepare('SELECT 1 FROM people LIMIT 1').get()) {
+        if (Date.now() >= waitDeadline) throw new Error('Another Doneline process is setting up this workspace. Try again shortly.')
+        await new Promise(resolve => setTimeout(resolve, 100))
+        synchronized = await cloudSync()
+      }
+      if (!_db.prepare('SELECT 1 FROM people LIMIT 1').get()) {
+        // Bootstrap on the server with deterministic IDs and INSERT OR IGNORE.
+        // Two first devices share the same profiles, and a delayed bootstrap
+        // cannot replace the other device's freshly edited name/color.
+        const [me, friend] = defaultProfileIds()
+        const cfg = _openedSyncConfig!
+        await remoteTransaction(cfg, [
+          { sql: 'INSERT OR IGNORE INTO people(id,name,color,emoji,position) VALUES (?,?,?,?,?)', args: [me, 'Me', '#2f7a4d', '🙂', 0] },
+          { sql: 'INSERT OR IGNORE INTO people(id,name,color,emoji,position) VALUES (?,?,?,?,?)', args: [friend, 'Friend', '#9c4a4a', '🧑', 1] }
+        ])
+        await cloudSync()
+      }
+      applySchema(_db)
+    } else {
+      void cloudSync().catch(() => {})
     }
   }
   _initialized = true
@@ -313,6 +392,7 @@ export function getDb(): DB {
   // Lazy fallback (e.g. local-only contexts that never called initDb).
   _db = openConnection()
   applySchema(_db)
+  if (_cloud) { installSyncJournal(_db); backfillRecurrenceExclusions(_db) }
   _initialized = true
   return _db
 }
@@ -325,13 +405,53 @@ export function cloudSync(): Promise<boolean> {
     return _syncInFlight
   }
   const connection = _db
+  const cfg = _openedSyncConfig
+  if (!cfg) return Promise.resolve(false)
   _syncInFlight = Promise.resolve().then(async () => {
-    do {
-      _syncRequested = false
-      await connection.sync()
-      // Include writes made while the previous pull/push was running.
-    } while (_syncRequested && _db === connection)
-    return _db === connection
+    // Desktop and MCP share one file. A lease prevents an older remote snapshot
+    // from another process overwriting a newly acknowledged local edit.
+    const leaseOwner = uuid()
+    let lease = `${leaseOwner}:${Date.now() + 120_000}`
+    const acquired = connection.transaction(() => {
+      const current = connection.prepare("SELECT value FROM __sync_meta WHERE key='lease'").get() as { value: string } | undefined
+      if (current && Number(current.value.slice(current.value.lastIndexOf(':') + 1)) > Date.now()) return false
+      connection.prepare('INSERT OR REPLACE INTO __sync_meta VALUES (?,?)').run('lease', lease)
+      return true
+    }).immediate()
+    if (!acquired) return false
+    const verifyLease = () => {
+      if (_db !== connection) throw new Error('The workspace changed while syncing. Pending changes remain saved locally.')
+      const renewed = `${leaseOwner}:${Date.now() + 120_000}`
+      const result = connection.prepare("UPDATE __sync_meta SET value=? WHERE key='lease' AND value=?").run(renewed, lease)
+      if (result.changes !== 1) throw new Error('Another process took over workspace sync. Pending changes remain saved locally.')
+      lease = renewed
+    }
+    _syncing = true
+    emitSyncStatus()
+    try {
+      let loops = 0
+      do {
+        _syncRequested = false
+        await syncOfflineWorkspace(connection, cfg, verifyLease)
+        const pendingBeforeBackfill = pendingSyncChanges(connection)
+        // A fresh device can receive old JSON exclusions in its first pull.
+        // Promote those dates only when no independent date record exists.
+        backfillRecurrenceExclusions(connection)
+        if (pendingSyncChanges(connection) > pendingBeforeBackfill) _syncRequested = true
+        loops++
+        // Include writes made while the previous pull/push was running.
+        // Ongoing typing/focus heartbeats must not keep one sync alive forever.
+      } while (_syncRequested && _db === connection && loops < 2)
+      _lastSyncError = null
+      return _db === connection
+    } catch (error) {
+      _lastSyncError = error instanceof Error ? error.message : 'Workspace unavailable.'
+      throw error
+    } finally {
+      if (_db === connection) connection.prepare("DELETE FROM __sync_meta WHERE key='lease' AND value=?").run(lease)
+      _syncing = false
+      emitSyncStatus()
+    }
   }).finally(() => { _syncInFlight = null })
   return _syncInFlight
 }
@@ -340,13 +460,38 @@ export function isCloud(): boolean {
   return _cloud
 }
 
+export function getWorkspaceSyncStatus(): WorkspaceSyncStatus {
+  if (!_db || !_cloud) return { state: 'local', cloud: false, pending: 0, lastSyncedAt: null }
+  const pending = pendingSyncChanges(_db)
+  const last = _db.prepare("SELECT value FROM __sync_meta WHERE key='lastSyncedAt'").get() as { value: string } | undefined
+  return {
+    state: _syncing ? 'syncing' : _lastSyncError ? (/access was rejected|sync failed|Invalid workspace/.test(_lastSyncError) ? 'error' : 'offline') : pending ? 'pending' : last ? 'synced' : 'pending',
+    cloud: true, pending, lastSyncedAt: last?.value ?? null,
+    ...(_lastSyncError ? { message: _lastSyncError } : {})
+  }
+}
+
+function emitSyncStatus(): void {
+  const status = getWorkspaceSyncStatus()
+  for (const listener of syncListeners) listener(status)
+}
+
+export function onWorkspaceSyncStatus(listener: (status: WorkspaceSyncStatus) => void): () => void {
+  syncListeners.add(listener)
+  return () => { syncListeners.delete(listener) }
+}
+
 export function closeDb(): void {
   if (_db) {
     _db.close()
     _db = null
     _cloud = false
     _initialized = false
+    _lastSyncError = null
+    _syncing = false
   }
+  _openedPath = null
+  _openedSyncConfig = null
 }
 
 /** Re-open after the workspace connection changed (connect / disconnect). */
@@ -359,19 +504,5 @@ export async function reopenDb(): Promise<void> {
 
 /** Validate workspace credentials by opening a throwaway replica and syncing. */
 export async function testWorkspace(cfg: { syncUrl: string; authToken: string }): Promise<void> {
-  const testPath = path.join(dataDir(), 'doneline-conntest.db')
-  const opts: ReplicaOptions = { syncUrl: cfg.syncUrl, authToken: cfg.authToken }
-  const tmp = new Database(testPath, opts)
-  try {
-    await tmp.sync()
-  } finally {
-    tmp.close()
-    for (const suffix of ['', '-wal', '-shm', '-client_wal_index']) {
-      try {
-        fs.unlinkSync(testPath + suffix)
-      } catch {
-        /* ignore */
-      }
-    }
-  }
+  await remoteTransaction(cfg, [{ sql: 'SELECT 1 AS connected' }], false)
 }

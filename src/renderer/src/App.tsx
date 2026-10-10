@@ -15,8 +15,12 @@ import SelfSetupBanner from './components/SelfSetupBanner'
 import PresenceChip from './components/PresenceChip'
 import CommandPalette from './components/CommandPalette'
 import NudgeToast from './components/NudgeToast'
-import { ProfileProvider } from './profile'
+import DeletionUndoToast from './components/DeletionUndoToast'
+import SearchResultEditors from './components/SearchResultEditors'
+import { ProfileProvider, useProfile } from './profile'
 import { FocusProvider, useFocus } from './focus'
+import { localDateInput } from './lib/format'
+import { searchTab, type SearchSelection } from './lib/searchNavigation'
 
 type Tab = 'today' | 'calendar' | 'goals' | 'settings'
 
@@ -30,7 +34,20 @@ const TABS: { id: Tab; label: string }[] = [
 function AppInner() {
   const [tab, setTab] = useState<Tab>('today')
   const [cmdOpen, setCmdOpen] = useState(false)
+  const [selection, setSelection] = useState<SearchSelection | null>(null)
+  const [searchShortcut, setSearchShortcut] = useState('Ctrl+K')
+  const { active } = useProfile()
   const { setOpen: openFocus } = useFocus()
+  useEffect(() => { setSelection(null) }, [active])
+  function navigate(destination: Tab) { setSelection(null); setTab(destination) }
+  function openResult(result: SearchSelection) { setTab(searchTab(result)); setSelection(result) }
+  const resultDay = selection?.kind === 'event' ? localDateInput(new Date(selection.item.starts_at)) : selection?.kind === 'note' ? selection.item.day : undefined
+
+  useEffect(() => {
+    let active = true
+    void api.platform().then((platform) => { if (active) setSearchShortcut(platform === 'darwin' ? '⌘K' : 'Ctrl+K') }).catch(() => {})
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -43,7 +60,7 @@ function AppInner() {
   // Tray "New todo" → jump to Today and focus the quick-add box.
   useEffect(() => {
     return api.onTrayNewTodo(() => {
-      setTab('today')
+      navigate('today')
       setTimeout(() => window.dispatchEvent(new Event('doneline:quickadd')), 50)
     })
   }, [])
@@ -74,7 +91,7 @@ function AppInner() {
             {TABS.map((t) => (
               <button
                 key={t.id}
-                onClick={() => setTab(t.id)}
+                onClick={() => navigate(t.id)}
                 className={`rounded-full px-4 py-2 text-sm font-bold transition ${
                   tab === t.id ? 'bg-mint-ink text-white shadow-clay-sm' : 'text-slate-500 hover:text-ink'
                 }`}
@@ -90,13 +107,13 @@ function AppInner() {
             <button
               onClick={() => setCmdOpen(true)}
               aria-label="Command palette"
-              title="Command palette (Ctrl+K)"
+              title={`Search (${searchShortcut})`}
               className="flex h-9 items-center gap-1.5 rounded-full bg-white/70 px-3 text-slate-500 shadow-clay-sm backdrop-blur transition hover:bg-white hover:text-ink"
             >
               <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
                 <circle cx="9" cy="9" r="6" /><path d="M15 15l3 3" strokeLinecap="round" />
               </svg>
-              <span className="hidden text-xs font-bold sm:inline">⌘K</span>
+              <span className="hidden text-xs font-bold sm:inline">{searchShortcut}</span>
             </button>
             <button
               onClick={() => api.toggleFullscreen()}
@@ -114,8 +131,8 @@ function AppInner() {
 
         <main className="flex-1">
           {tab === 'today' && <TodayView />}
-          {tab === 'calendar' && <CalendarView />}
-          {tab === 'goals' && <GoalsView />}
+          {tab === 'calendar' && <CalendarView initialDay={resultDay} />}
+          {tab === 'goals' && <GoalsView initialGoal={selection?.kind === 'goal' ? selection.item : undefined} onInitialGoalClosed={() => setSelection(null)} />}
           {tab === 'settings' && <SettingsView />}
         </main>
       </div>
@@ -123,13 +140,16 @@ function AppInner() {
       <FocusOverlay />
       <FocusInvitePrompt />
       <NudgeToast />
+      <DeletionUndoToast />
       <SelfSetupBanner />
+      <SearchResultEditors selection={selection} onClose={() => setSelection(null)} />
 
       <CommandPalette
         open={cmdOpen}
         onClose={() => setCmdOpen(false)}
-        onNavigate={(t) => setTab(t)}
+        onNavigate={navigate}
         onFocus={() => openFocus(true)}
+        onOpenResult={openResult}
       />
     </div>
   )

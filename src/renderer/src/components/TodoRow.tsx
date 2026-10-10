@@ -2,6 +2,7 @@ import type { Reaction, TodoWithGoal } from '../../../shared/api'
 import { fmtTime } from '../lib/format'
 import { useProfile } from '../profile'
 import { isTodoDoneForSelf } from '../lib/todoCompletion'
+import TaskDateChip from './TaskDateChip'
 
 interface Props {
   todo: TodoWithGoal
@@ -19,6 +20,8 @@ interface Props {
   onDragEnter?: () => void
   onDragEnd?: () => void
   pending?: boolean
+  planningDay?: string
+  onReschedule?: (todo: TodoWithGoal, day: string | null) => Promise<void>
 }
 
 const REACTION_EMOJIS = ['👏', '🔥']
@@ -36,7 +39,9 @@ export default function TodoRow({
   onDragStart,
   onDragEnter,
   onDragEnd,
-  pending = false
+  pending = false,
+  planningDay,
+  onReschedule
 }: Props) {
   const { people, self } = useProfile()
   const done = isTodoDoneForSelf(todo, self)
@@ -165,9 +170,9 @@ export default function TodoRow({
         </span>
       )}
 
-      <span className="w-16 shrink-0 text-right text-xs font-semibold text-slate-400">
+      {!done && planningDay && onReschedule ? <TaskDateChip todo={todo} today={planningDay} disabled={pending} onReschedule={onReschedule} /> : <span className="w-16 shrink-0 text-right text-xs font-semibold text-slate-400">
         {done ? todo.completed_at ? fmtTime(todo.completed_at) : 'done by you' : todo.due_at ? fmtTime(todo.due_at) : 'not yet'}
-      </span>
+      </span>}
 
       <button
         onClick={() => onDelete(todo.id)}

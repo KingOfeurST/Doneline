@@ -12,6 +12,8 @@ export const CH = {
 
   todosList: 'todos:list',
   todosToday: 'todos:today',
+  todosPlanned: 'todos:planned',
+  searchQuery: 'search:query',
   todosArchived: 'todos:archived',
   todoCreate: 'todos:create',
   todoUpdate: 'todos:update',
@@ -24,6 +26,13 @@ export const CH = {
   eventUpdate: 'events:update',
   eventDelete: 'events:delete',
   eventTemplates: 'events:templates',
+  eventSeriesContext: 'events:seriesContext',
+  eventUpdateScoped: 'events:updateScoped',
+  dataListBackups: 'data:listBackups',
+  dataCreateBackup: 'data:createBackup',
+  dataRestoreBackup: 'data:restoreBackup',
+  trashList: 'trash:list',
+  trashRestore: 'trash:restore',
   eventSeriesDelete: 'events:seriesDelete',
   itemsPreviewRemoval: 'items:previewRemoval',
   itemsRemoveRange: 'items:removeRange',
@@ -38,6 +47,7 @@ export const CH = {
   workspaceConnect: 'workspace:connect',
   workspaceDisconnect: 'workspace:disconnect',
   workspaceSync: 'workspace:sync',
+  workspaceSyncStatus: 'workspace:syncStatus',
   workspaceMyCode: 'workspace:myCode',
 
   notifGet: 'notif:get',
@@ -93,7 +103,8 @@ export const CH = {
 export const EVT = {
   workspaceChanged: 'workspace:changed',
   prepareQuit: 'app:prepareQuit',
-  updateStatus: 'update:status'
+  updateStatus: 'update:status',
+  workspaceSyncStatus: 'workspace:syncStatus:changed'
 } as const
 
 export type Channel = (typeof CH)[keyof typeof CH]

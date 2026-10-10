@@ -3,9 +3,10 @@ import { getDb } from './db.js'
 import { getPerson, listPeople } from './people.js'
 import { getCalDavConfig, setCalDavConfig, type CalDavConfig } from './settings.js'
 import { getEvent } from './events.js'
-import { buildICS, editICS, excludeICSOccurrence, icsResourceUid, parseICSOccurrences, type ICSInput } from './ics.js'
+import { buildICS, editICSScoped, excludeICSOccurrence, icsResourceUid, parseICSOccurrences, type ICSInput } from './ics.js'
 import { calendarUrlContains, ensureRemoteCalendarInstancesForRange, type CalendarResource } from './calendarResources.js'
 import type { CalEvent } from './types.js'
+import { applyResourceChanges, resourceChanges } from './calendarResourceChanges.js'
 
 type DAVClient = Awaited<ReturnType<typeof createDAVClient>>
 type Tombstone = { person_id: string; uid: string; recurrence_id: string; url: string | null; etag: string | null }
@@ -13,6 +14,29 @@ const ICLOUD_URL = 'https://caldav.icloud.com'
 const flights = new Map<string, Promise<SyncResult>>()
 const queued = new Set<string>()
 const completionCallbacks = new Map<string, Set<() => void>>()
+let syncPauseDepth = 0
+let resumeSync: (() => void) | undefined
+let syncResumed: Promise<void> | undefined
+
+/** Restore waits for writers, and blocks new calendar requests until its DB is ready. */
+export async function withCalendarSyncPaused<T>(operation: () => T | Promise<T>): Promise<T> {
+  if (syncPauseDepth++ === 0) syncResumed = new Promise<void>((resolve) => { resumeSync = resolve })
+  try {
+    await Promise.allSettled([...flights.values()])
+    return await operation()
+  } finally {
+    if (--syncPauseDepth === 0) {
+      const release = resumeSync
+      resumeSync = undefined
+      syncResumed = undefined
+      release?.()
+      for (const personId of [...queued]) {
+        queued.delete(personId)
+        queueCalendarSync(personId)
+      }
+    }
+  }
+}
 
 const networkFetch: typeof fetch = (input, init) => fetch(input, { ...init, signal: init?.signal ?? AbortSignal.timeout(30_000) })
 const checkedFetch: typeof fetch = async (input, init) => {
@@ -87,12 +111,14 @@ function hasPendingChanges(personId: string): boolean {
   const calendarUrl = getCalDavConfig(personId)?.calendarUrl
   const pending = db.prepare(`SELECT caldav_url AS url FROM events WHERE person_id = ? AND recurrence IS NULL AND
     (calendar_dirty = 1 OR (source = 'local' AND caldav_recurrence_id IS NULL))
-    UNION ALL SELECT url FROM calendar_tombstones WHERE person_id = ?`).all(personId, personId) as { url: string | null }[]
+    UNION ALL SELECT url FROM calendar_tombstones WHERE person_id = ?
+    UNION ALL SELECT url FROM calendar_resource_changes WHERE person_id = ?`).all(personId, personId, personId) as { url: string | null }[]
   return pending.some((row) => !row.url || !calendarUrl || calendarUrlContains(calendarUrl, row.url))
 }
 
 /** Serialize manual/full syncs per profile; parallel profiles keep independent calendars. */
 export function syncCalendar(personId: string): Promise<SyncResult> {
+  if (syncPauseDepth && syncResumed) return syncResumed.then(() => syncCalendar(personId))
   const existing = flights.get(personId)
   if (existing) return existing
   let completed = false
@@ -121,6 +147,7 @@ export function queueCalendarSync(personId?: string, onComplete?: () => void): v
       callbacks.add(onComplete)
       completionCallbacks.set(id, callbacks)
     }
+    if (syncPauseDepth) { queued.add(id); continue }
     if (flights.has(id)) { queued.add(id); continue }
     void syncCalendar(id).catch((error: unknown) => {
       console.error('[doneline] calendar sync will retry:', error instanceof Error ? error.message : 'Calendar unavailable')
@@ -152,6 +179,42 @@ async function performSync(personId: string): Promise<SyncResult> {
   }
   let pushed = 0
   const db = getDb()
+  // Restoring a backup/Trash item never invents a partial remote repeat rule.
+  // A missing UID becomes an independent local event; an existing UID keeps its
+  // identity and is updated against the freshly fetched resource below.
+  const restored = db.prepare('SELECT * FROM events WHERE person_id = ? AND calendar_restore = 1').all(personId) as CalEvent[]
+  for (const event of restored) {
+    if (event.caldav_url && !calendarUrlContains(calendar.url, event.caldav_url)) continue
+    if (!event.caldav_uid || (!resources.has(event.caldav_uid) && !(event.caldav_url && remoteUrls.has(event.caldav_url)))) {
+      db.prepare(`UPDATE events SET caldav_uid = NULL, caldav_url = NULL, caldav_etag = NULL, caldav_recurrence_id = NULL,
+        source = 'local', calendar_dirty = 0, calendar_restore = 0 WHERE id = ?`).run(event.id)
+    }
+  }
+  // Apply ordered, durable scoped edits to the latest remote resource, using its
+  // current ETag. A command added while PUT is in flight remains queued.
+  const changes = resourceChanges(personId)
+  for (const uid of new Set(changes.map((change) => change.uid))) {
+    checkConfiguration(personId, config)
+    const pending = changes.filter((change) => change.uid === uid && (!change.url || calendarUrlContains(calendar.url, change.url)))
+    if (!pending.length) continue
+    const resource = resources.get(uid)
+    if (!resource) throw new Error('The remote repeating event is unavailable. Its saved edit will remain pending until you reconnect or restore it.')
+    const applicable = pending.filter((change) => !change.url || change.url === resource.url)
+    if (!applicable.length) continue
+    const ics = applyResourceChanges(resource, applicable)
+    const response = await client.updateCalendarObject({ calendarObject: { url: resource.url!, etag: resource.etag ?? undefined, data: ics } })
+    checkResponse(response, 'Saving the repeating calendar event')
+    checkConfiguration(personId, config)
+    resource.ics = ics
+    resource.etag = response.headers.get('etag')
+    db.transaction(() => {
+      saveResource(resource)
+      for (const change of applicable) db.prepare('DELETE FROM calendar_resource_changes WHERE id = ?').run(change.id)
+      db.prepare('UPDATE events SET calendar_restore = 0 WHERE person_id = ? AND caldav_uid = ? AND calendar_dirty = 0').run(personId, uid)
+    }).immediate()
+    if (resourceChanges(personId, uid).length) queued.add(personId)
+    pushed++
+  }
   // Read tombstones after fetch: local deletions may happen while the request is in flight.
   const deletions = db.prepare('SELECT * FROM calendar_tombstones WHERE person_id = ?').all(personId) as Tombstone[]
   for (const deletion of deletions) {
@@ -214,7 +277,7 @@ async function performSync(personId: string): Promise<SyncResult> {
     const resource = resources.get(uid)
     if (event.caldav_recurrence_id && !resource) throw new Error('The remote repeat rule is unavailable. Your occurrence edit is saved; sync again before retrying.')
     const input = eventInput(event, uid)
-    const ics = resource ? editICS(resource.ics, input, event.caldav_recurrence_id) : buildICS(input)
+    const ics = resource ? editICSScoped(resource.ics, input, 'occurrence', event.caldav_recurrence_id) : buildICS(input)
     const url = resource?.url || event.caldav_url || new URL(`${encodeURIComponent(uid)}.ics`, calendar.url.endsWith('/') ? calendar.url : `${calendar.url}/`).href
     // Reserve metadata before the request so a delete during upload gets a tombstone.
     db.prepare('UPDATE events SET caldav_uid = ?, caldav_url = ?, calendar_dirty = 1 WHERE id = ?').run(uid, url, event.id)
@@ -228,7 +291,7 @@ async function performSync(personId: string): Promise<SyncResult> {
     const current = getEvent(event.id)
     if (current && current.person_id === personId && current.caldav_uid === uid) {
       const dirty = contentKey(current) === contentKey(event) ? 0 : 1
-      db.prepare("UPDATE events SET source = 'caldav', caldav_etag = ?, calendar_dirty = ? WHERE id = ?").run(saved.etag, dirty, event.id)
+      db.prepare("UPDATE events SET source = 'caldav', caldav_etag = ?, calendar_dirty = ?, calendar_restore = ? WHERE id = ?").run(saved.etag, dirty, dirty ? current.calendar_restore ?? 0 : 0, event.id)
       if (dirty) queued.add(personId)
     } else {
       queued.add(personId)

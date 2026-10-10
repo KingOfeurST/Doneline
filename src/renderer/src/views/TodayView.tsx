@@ -10,8 +10,10 @@ import FocusStatsCard from '../components/FocusStatsCard'
 import QuickAdd from '../components/QuickAdd'
 import DailyNote from '../components/DailyNote'
 import { fmtDayLabel } from '../lib/format'
-import { isTodoDoneForSelf } from '../lib/todoCompletion'
 import { useTodoCompletion } from '../lib/useTodoCompletion'
+import { groupTasks, rescheduledDue, TASK_GROUPS, type TaskGroup } from '../lib/taskPlanning'
+import SyncStatus from '../components/SyncStatus'
+import { notifyDeleted } from '../lib/deletionUndo'
 
 export default function TodayView() {
   const { active, people, self, queryPersonId, defaultOwnerId, personById, tick } = useProfile()
@@ -28,6 +30,12 @@ export default function TodayView() {
   const [editTodo, setEditTodo] = useState<TodoWithGoal | null>(null)
   const completion = useTodoCompletion(self, people.map((p) => p.id))
   const { guard, setError } = completion
+  const [expanded, setExpanded] = useState<Record<TaskGroup, boolean>>({ today: true, overdue: true, upcoming: false, undated: false })
+  const scheduled = useRef(new Map<string, string | null>())
+  const [schedulingIds, setSchedulingIds] = useState<Set<string>>(new Set())
+  const scope = `${queryPersonId || 'all'}`
+  const currentScope = useRef(scope)
+  currentScope.current = scope
 
   // Drag-to-reorder state
   const dragId = useRef<string | null>(null)
@@ -38,12 +46,12 @@ export default function TodayView() {
     try {
       const day = await api.today()
       const [loaded, loadedEvents] = await Promise.all([
-        api.todos.today(day, queryPersonId),
+        api.todos.planned(day, queryPersonId),
         api.events.day(day, queryPersonId)
       ])
       if (!guard.isCurrent(request)) return
       setToday(day)
-      setTodos(guard.applyPending(loaded))
+      setTodos(guard.applyPending(loaded).map((todo) => scheduled.current.has(todo.id) ? { ...todo, due_at: scheduled.current.get(todo.id)! } : todo))
       setEvents(loadedEvents)
       // Clear old reactions too when the new profile has no tasks.
       const allReactions = await Promise.all(loaded.map((t) => api.reactions.list(t.id)))
@@ -62,6 +70,7 @@ export default function TodayView() {
   }, [load])
 
   function toggle(id: string) {
+    if (scheduled.current.has(id)) return
     const todo = todos.find((t) => t.id === id)
     if (!todo) return
     return completion.toggle(todo, (updated) => {
@@ -80,8 +89,10 @@ export default function TodayView() {
   }
 
   async function removeTodo(id: string) {
+    if (scheduled.current.has(id) || completion.pendingIds.has(id)) return
     try {
-      await api.todos.remove(id)
+      const receipt = await api.todos.remove(id)
+      notifyDeleted(receipt?.trashId, 'Task moved to Trash')
       await latestLoad.current()
     } catch {
       setError('Could not delete this todo. Please try again.')
@@ -89,10 +100,39 @@ export default function TodayView() {
   }
   async function removeEvent(id: string) {
     try {
-      await api.events.remove(id)
+      const receipt = await api.events.remove(id)
+      notifyDeleted(receipt?.trashId, 'Event moved to Trash')
       await latestLoad.current()
     } catch {
       setError('Could not delete this event. Please try again.')
+    }
+  }
+
+  async function reschedule(todo: TodoWithGoal, day: string | null) {
+    if (scheduled.current.has(todo.id) || completion.pendingIds.has(todo.id)) return
+    let dueAt: string | null
+    try { dueAt = rescheduledDue(todo, day) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Choose a valid date.'); return }
+    if (dueAt === todo.due_at) return
+    scheduled.current.set(todo.id, dueAt)
+    setSchedulingIds(new Set(scheduled.current.keys()))
+    guard.invalidate()
+    setError('')
+    setTodos((rows) => rows.map((row) => row.id === todo.id ? { ...row, due_at: dueAt } : row))
+    try {
+      const saved = await api.todos.update(todo.id, { due_at: dueAt })
+      if (!saved) throw new Error('This task no longer exists. Refresh and try again.')
+      if (scope === currentScope.current) setTodos((rows) => rows.map((row) => row.id === todo.id ? saved : row))
+    } catch (cause) {
+      if (scope === currentScope.current) {
+        setTodos((rows) => rows.map((row) => row.id === todo.id ? { ...row, due_at: todo.due_at } : row))
+        setError(cause instanceof Error ? cause.message : 'Could not reschedule this task. Please try again.')
+      }
+    } finally {
+      scheduled.current.delete(todo.id)
+      setSchedulingIds(new Set(scheduled.current.keys()))
+      guard.invalidate()
+      void latestLoad.current()
     }
   }
 
@@ -103,6 +143,7 @@ export default function TodayView() {
     dragId.current = null
     setOverId(null)
     if (!fromId || !toId || fromId === toId) return
+    if (scheduled.current.size || completion.pendingIds.size) return
 
     const fromIdx = todos.findIndex((t) => t.id === fromId)
     const toIdx = todos.findIndex((t) => t.id === toId)
@@ -121,9 +162,7 @@ export default function TodayView() {
   }
 
   const reactionsFor = (todoId: string) => reactions.filter((r) => r.todo_id === todoId)
-  const openTodos = todos.filter((t) => !isTodoDoneForSelf(t, self))
-  const finishedTodos = todos.filter((t) => isTodoDoneForSelf(t, self))
-  const openCount = openTodos.length
+  const { groups, finished: finishedTodos, remaining: openCount } = groupTasks(todos, today, self)
 
   return (
     <div className="space-y-6">
@@ -131,6 +170,7 @@ export default function TodayView() {
         <div>
           <h1 className="text-3xl font-extrabold text-ink">Today</h1>
           <p className="font-semibold text-slate-500">{today && fmtDayLabel(today)}</p>
+          <SyncStatus />
         </div>
         <span
           className={`rounded-full px-3 py-1.5 text-sm font-bold ${
@@ -203,9 +243,15 @@ export default function TodayView() {
               Everything on the list is done. Go enjoy it.
             </p>
           </div>
-        ) : (
-          <div>
-            {openTodos.map((t) => (
+        ) : null}
+          <div className="mt-3 space-y-1">
+            {TASK_GROUPS.map((group) => <div key={group.id} data-task-group={group.id}>
+              <button className={`flex w-full items-center gap-2 rounded-xl px-1 py-2 text-left text-sm font-extrabold ${group.id === 'overdue' && groups[group.id].length ? 'text-rose-ink' : 'text-slate-500'}`}
+                aria-expanded={expanded[group.id]} onClick={() => setExpanded((value) => ({ ...value, [group.id]: !value[group.id] }))}>
+                <svg viewBox="0 0 16 16" className={`h-3.5 w-3.5 transition ${expanded[group.id] ? 'rotate-90' : ''}`} fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 3 5 5-5 5" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                {group.label}<span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs tabular-nums">{groups[group.id].length}</span>
+              </button>
+              {expanded[group.id] && (groups[group.id].length ? groups[group.id].map((t) => (
               <TodoRow
                 key={t.id}
                 todo={t}
@@ -219,11 +265,13 @@ export default function TodayView() {
                 onDragEnter={() => setOverId(t.id)}
                 onDragEnd={handleDragEnd}
                 onEdit={setEditTodo}
-                pending={completion.pendingIds.has(t.id)}
+                pending={completion.pendingIds.has(t.id) || schedulingIds.has(t.id)}
+                planningDay={today}
+                onReschedule={reschedule}
               />
-            ))}
+            )) : <p className="px-6 pb-2 text-xs font-semibold text-slate-400">{group.id === 'today' ? 'Nothing due today.' : group.id === 'overdue' ? 'Nothing overdue.' : 'No tasks here.'}</p>)}
+            </div>)}
           </div>
-        )}
 
         {finishedTodos.length > 0 && (
           <details className="mt-5">

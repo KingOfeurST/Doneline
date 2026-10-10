@@ -73,6 +73,8 @@ export interface CalEvent {
   /** Remote recurrence identity; null for a single, non-repeating resource. */
   caldav_recurrence_id: string | null
   calendar_dirty: number
+  /** Restored snapshots reconcile against the current calendar before writing. */
+  calendar_restore?: number
   recurrence: string | null // JSON Recurrence (template) or null
   recur_parent: string | null
   source: 'local' | 'caldav'

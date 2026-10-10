@@ -67,15 +67,17 @@ if (!process.versions.electron) {
       updates:{version:async()=> 'fixture',status:async()=>{if(fixture.deferUpdateStatus)return new Promise(resolve=>fixture.pendingUpdateSnapshots.push(resolve));return {...fixture.updateStatus};},check:async()=>{record('updates.check',null);return {...fixture.updateStatus};},install:async()=>{record('updates.install',{canAutoInstall:fixture.updateStatus.canAutoInstall});},onStatus:fn=>{fixture.updateListeners.push(fn);return()=>{fixture.updateListeners=fixture.updateListeners.filter(listener=>listener!==fn);};}},
       people:{list:async()=>fixture.people},
       presence:{getSelf:async()=>fixture.selfId,update:async()=>true,setSelf:async()=>{throw Error('Fixture identity save failed');},unseenNudges:async()=>[{id:'nudge-fixture',from_person:'friend',to_person:'self',kind:'nudge',message:'Fixture nudge message',from_name:'Friend',from_emoji:'F',created_at:new Date().toISOString(),seen_at:null}],markNudgeSeen:async id=>{record('presence.markNudgeSeen',id);fixture.nudgeReceiptAttempts++;if(fixture.nudgeReceiptAttempts===1)throw Error('Fixture receipt failed');}},
-      workspace:{status:async()=>({cloud:false,syncUrl:null}),myCode:async()=>null,onChanged:fn=>{fixture.listeners.push(fn);return()=>{fixture.listeners=fixture.listeners.filter(x=>x!==fn);};}},
+      workspace:{status:async()=>({cloud:false,syncUrl:null}),syncStatus:async()=>({state:'local',cloud:false,pending:0,lastSyncedAt:null}),onSyncStatus:()=>()=>{},myCode:async()=>null,onChanged:fn=>{fixture.listeners.push(fn);return()=>{fixture.listeners=fixture.listeners.filter(x=>x!==fn);};}},
       notifications:{get:async()=>({enabled:true,eventsEnabled:true,eventLeadMin:15,todosEnabled:true,morningEnabled:false,morningTime:'09:00'})},
       caldav:{getConfig:personId=>new Promise(resolve=>fixture.pendingConfigs.push({personId,resolve}))},
       goals:{list:async()=>[]},
+      data:{listBackups:async()=>[],createBackup:async()=>({id:'2026-10-10T10-00-00-000Z-12345678',createdAt:'2026-10-10T10:00:00Z',reason:'manual',sizeBytes:200}),restoreBackup:async()=>({safetyBackup:{id:'2026-10-10T10-00-00-000Z-12345678',createdAt:'2026-10-10T10:00:00Z',reason:'manual',sizeBytes:200},restoredAt:new Date().toISOString()})},
+      trash:{list:async()=>[],restore:async()=>({kind:'task',itemIds:['id'],personId:'self'})},
       reactions:{list:async()=>[],toggle:async()=>true},
       focus:{record:async input=>{record('focus.record',input);return true;},tray:()=>{},getTarget:async()=>4,stats:async()=>({streak:0,todaySessions:0,weekMinutes:0,weekSessions:0,target:4,targetMet:false}),sharedStreak:async()=>0},
       notes:{get:async(day,personId)=>{if(fixture.noteLoadError)throw Error('Fixture note read failed');return {day,person_id:personId,body:fixture.notes[personId]||'',updated_at:new Date().toISOString()};},set:(day,body,personId)=>{record('notes.set',{day,body,personId});return new Promise((resolve,reject)=>fixture.noteSaves.push({resolve,reject,day,body,personId}));}},
       todos:{
-        today:async()=>fixture.todos.map(t=>({...t})),list:async()=>fixture.todos.map(t=>({...t})),
+        today:async()=>fixture.todos.map(t=>({...t})),planned:async()=>fixture.todos.map(t=>({...t})),list:async()=>fixture.todos.map(t=>({...t})),
         toggle:(id,done)=>{record('todos.toggle',{id,done});return new Promise((resolve,reject)=>fixture.pendingToggles.push({id,done,resolve,reject}));},
         remove:async id=>{fixture.todos=fixture.todos.filter(t=>t.id!==id);},
         create:async input=>{record('todos.create',input);if(fixture.deferCreates)return new Promise(resolve=>fixture.pendingCreates.push({input,resolve}));return todo('created-todo',input.title,input.due_at);},
@@ -83,6 +85,8 @@ if (!process.versions.electron) {
         templates:async()=>[],archived:async()=>[],reorder:async()=>{}
       },
       events:{
+        seriesContext:async id=>{const row=fixture.events.find(e=>e.id===id)||fixture.templates.find(e=>e.id===id)||fixture.scopeEvent;const template=row.recurrence?row:fixture.templates.find(e=>e.id===row.recur_parent);return {event:row,template:template||row,recurrence:template?JSON.parse(template.recurrence):null,scopes:row.recurrence?['series']:['occurrence','future','series'],remote:!!row.caldav_uid,...(row.caldav_uid?{limitation:'Event details and times can change here. Change Apple Calendar repeat weekdays or date bounds in Apple Calendar.'}:{})};},
+        updateScoped:async(id,input,scope)=>{record('events.updateScoped',{id,...input,scope});record('events.update',{id,...input});return {...(fixture.events.find(e=>e.id===id)||fixture.templates.find(e=>e.id===id)||fixture.scopeEvent),...input};},
         list:async opts=>{if(fixture.deferEvents)return new Promise(resolve=>fixture.pendingEvents.push({personId:opts.personId,resolve}));return fixture.events;},day:async()=>fixture.events.filter(e=>new Date(e.starts_at).getTime()<new Date(at(dayKey(tomorrow),0)).getTime() && new Date(e.ends_at).getTime()>new Date(at(today,0)).getTime()),
         templates:async()=>fixture.templates,
         create:async input=>{record('events.create',input);return event('created-event',input.title,input.starts_at,input.ends_at,input.all_day?1:0);},
@@ -103,11 +107,13 @@ if (!process.versions.electron) {
     import TodayView from './src/renderer/src/views/TodayView';
     import SettingsView from './src/renderer/src/views/SettingsView';
     import NudgeToast from './src/renderer/src/components/NudgeToast';
+    import AddEventModal from './src/renderer/src/components/AddEventModal';
     import {flushPendingNotes} from './src/renderer/src/lib/notePersistence';
     window.__flushNotes=flushPendingNotes;
     function ProfileProbe(){const profile=useProfile();return <div><button onClick={()=>profile.setActive('self')}>Fixture self filter</button><button onClick={()=>profile.setActive('friend')}>Fixture friend filter</button><button onClick={()=>profile.setActive('all')}>Fixture all filter</button></div>}
     function FocusProbe(){const focus=useFocus();const {self}=useProfile();return <div><button onClick={()=>focus.startAnchored(new Date(Date.now()).toISOString(),25,5)}>Fixture start focus</button><output data-focus={focus.started?'started':'stopped'} data-identity={self}/></div>}
-    function Fixture(){const [view,setView]=useState('calendar');return <ProfileProvider><FocusProvider><div style={{maxWidth:1100,margin:'auto',padding:24}}><nav><button onClick={()=>setView('calendar')}>Fixture calendar</button><button onClick={()=>setView('today')}>Fixture today</button><button onClick={()=>setView('settings')}>Fixture settings</button><button onClick={()=>setView('nudges')}>Fixture nudges</button></nav><ProfileProbe/><FocusProbe/>{view==='calendar'?<CalendarView/>:view==='today'?<TodayView/>:view==='settings'?<SettingsView/>:<NudgeToast/>}</div></FocusProvider></ProfileProvider>}
+    function RecurrenceProbe(){const [open,setOpen]=useState(false);return <><button onClick={()=>setOpen(true)}>Fixture recurring edit</button><AddEventModal open={open} editEvent={window.__fixture.scopeEvent} onClose={()=>setOpen(false)} onCreated={()=>{}}/></>}
+    function Fixture(){const [view,setView]=useState('calendar');return <ProfileProvider><FocusProvider><div style={{maxWidth:1100,margin:'auto',padding:24}}><nav><button onClick={()=>setView('calendar')}>Fixture calendar</button><button onClick={()=>setView('today')}>Fixture today</button><button onClick={()=>setView('settings')}>Fixture settings</button><button onClick={()=>setView('nudges')}>Fixture nudges</button></nav><ProfileProbe/><FocusProbe/><RecurrenceProbe/>{view==='calendar'?<CalendarView/>:view==='today'?<TodayView/>:view==='settings'?<SettingsView/>:<NudgeToast/>}</div></FocusProvider></ProfileProvider>}
     createRoot(document.getElementById('root')).render(<React.StrictMode><Fixture/></React.StrictMode>);
   `
 
@@ -168,6 +174,44 @@ if (!process.versions.electron) {
     assert.equal(new Date(saved.ends_at) - new Date(saved.starts_at), 3_600_000, 'repeat end is distinct from one-event duration')
 
     await click('+ Add event')
+    await input('input[placeholder="Event title"]', 'Approved seven Thursdays')
+    await input('[aria-label="Event start date"]', '2026-10-15')
+    await input('[aria-label="Repeat schedule"]', 'weekly')
+    await input('[aria-label="Repeat until"]', '2026-11-26')
+    await until(() => document.querySelector('[aria-label="Recurrence preview"]')?.textContent.includes('7 occurrences'), 'seven-date approved recurrence preview')
+    assert.deepEqual(await evaluate(() => [...document.querySelectorAll('[aria-label="Recurrence preview"] span[title]')].map(row => row.title)), ['2026-10-15','2026-10-22','2026-10-29','2026-11-05','2026-11-12','2026-11-19','2026-11-26'])
+    fs.writeFileSync(path.join(os.tmpdir(), 'doneline-renderer-seven-thursdays.png'), (await win.webContents.capturePage()).toPNG())
+    await click('Cancel')
+
+    await evaluate(() => {
+      const source=__fixture.templates[0];
+      __fixture.templates.push({...source,id:'scope-rule',title:'Scope fixture',starts_at:'2026-10-15T15:00:00.000Z',ends_at:'2026-10-15T16:00:00.000Z',recurrence:JSON.stringify({freq:'weekly',days:[4],startDate:'2026-10-15',endDate:'2026-11-26'})});
+      __fixture.scopeEvent={...source,id:'scope-occurrence',title:'Scope fixture',starts_at:'2026-10-29T16:00:00.000Z',ends_at:'2026-10-29T17:00:00.000Z',recurrence:null,recur_parent:'scope-rule'};
+    })
+    await click('Fixture recurring edit')
+    await until(() => document.querySelector('input[value="future"]') && !document.querySelector('fieldset').disabled, 'dated recurrence edit scopes loaded')
+    assert.equal(await evaluate(() => document.querySelector('input[value="occurrence"]').checked), true)
+    assert.equal(await evaluate(() => !!document.querySelector('[aria-label="Repeat schedule"]')), false)
+    await input('input[placeholder="Event title"]', 'Typed before selecting scope')
+    await evaluate(() => document.querySelector('input[value="future"]').click())
+    assert.equal(await evaluate(() => document.querySelector('input[placeholder="Event title"]').value), 'Typed before selecting scope', 'scope selection retains typed details')
+    assert.equal(await evaluate(() => document.querySelector('[aria-label="Repeat from"]').value), '2026-10-29')
+    await until(() => document.querySelector('[aria-label="Recurrence preview"]')?.textContent.includes('5 occurrences'), 'future recurrence preview begins at selected date')
+    fs.writeFileSync(path.join(os.tmpdir(), 'doneline-renderer-future-scope.png'), (await win.webContents.capturePage()).toPNG())
+    await click('Save changes')
+    await until(() => !document.querySelector('[role="dialog"]'), 'future edit saved')
+    const futurePatch = await evaluate(() => __fixture.calls.filter(call => call.method === 'events.updateScoped').at(-1).input)
+    assert.equal(futurePatch.scope, 'future')
+    assert.equal(futurePatch.id, 'scope-occurrence')
+    assert.equal(JSON.parse(futurePatch.recurrence).startDate, '2026-10-29')
+    await click('Fixture recurring edit')
+    await until(() => document.querySelector('input[value="series"]') && !document.querySelector('fieldset').disabled, 'entire-series scope loaded')
+    await evaluate(() => document.querySelector('input[value="series"]').click())
+    assert.equal(await evaluate(() => document.querySelector('[aria-label="Event start date"]').value), '2026-10-15')
+    await until(() => document.querySelector('[aria-label="Recurrence preview"]')?.textContent.includes('7 occurrences'), 'entire-series preview includes all dates')
+    await click('Cancel')
+
+    await click('+ Add event')
     await input('input[placeholder="Event title"]', 'Invalid hours fixture')
     await input('[aria-label="Event start time"]', '11:00')
     await input('[aria-label="Event end time"]', '10:00')
@@ -210,7 +254,7 @@ if (!process.versions.electron) {
     await input('[aria-label="Repeat until"]', '2026-10-29')
     await click('Save changes')
     await until(() => !document.querySelector('[role="dialog"]'), 'repeat rule save')
-    const updated = await evaluate(() => __fixture.calls.find(call => call.method === 'events.update').input)
+    const updated = await evaluate(() => __fixture.calls.find(call => call.method === 'events.update' && call.input.id === 'rule').input)
     assert.deepEqual(JSON.parse(updated.recurrence).excludedDates, ['2026-10-08'])
     assert.equal(JSON.parse(updated.recurrence).endDate, '2026-10-29')
 
@@ -234,7 +278,7 @@ if (!process.versions.electron) {
     fs.writeFileSync(screenshot, (await win.webContents.capturePage()).toPNG())
 
     await evaluate(() => document.querySelector('button[title^="Remote occurrence"]').click())
-    await until(() => document.querySelector('[role="dialog"]')?.textContent.includes('Change the repeating schedule in Apple Calendar'), 'remote occurrence edit scope')
+    await until(() => document.querySelector('[role="dialog"]')?.textContent.includes('Change Apple Calendar repeat weekdays'), 'remote occurrence edit scope')
     assert.equal(await evaluate(() => !!document.querySelector('[aria-label="Repeat schedule"]')), false, 'remote occurrence cannot acquire a local repeat rule')
     await click('Cancel')
 

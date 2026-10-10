@@ -1,15 +1,15 @@
-Notes now finish saving before Doneline quits or installs an update. Previously, quitting could close the database before the editor sent its final changes. If saving fails, Doneline keeps the editor open and shows the error so you can retry.
+# Doneline 0.4.0
 
-Unsaved drafts remain on this device and can be recovered after reopening, including when the first note load fails. Save confirmations are checked before a draft is discarded.
+Keeps Doneline's existing interface and adds the approved planning and data recovery features.
 
-This release also includes the earlier instant todo completion and remaining count. Failed saves restore the task and show an error.
+- Automatic daily backups, manual backups, and restore with a safety copy. Backups are kept separately for each workspace; current Apple Calendar connections are preserved.
+- Deleted tasks and events go to a local 30-day Trash, with Restore and immediate Undo, including reviewed date-range removal.
+- Tasks and notes save immediately to local SQLite. A durable queue retries cloud sync in the background, with Saved locally / Syncing / Synced status. Previously connected workspaces reopen offline.
+- Today, Overdue, Upcoming, and No date task groups with counts and quick rescheduling. Completing personal or shared tasks still updates immediately and rolls back if saving fails.
+- Recurring events show their actual dates before saving. Edit one occurrence, this and future occurrences, or the whole series, preserving earlier dates and exclusions. Imported Apple Calendar series support these scopes for details and times; change their repeat schedule in Apple Calendar.
+- Ctrl+K on Windows or Cmd+K on Mac searches tasks, events, goals, and notes and opens the exact result, including historical notes.
+- Stable recurring occurrence identities prevent duplicate generation across devices. Independently deleted recurring dates remain deleted when offline devices reconnect, and Undo restores only the selected date. Sync retries after a lost acknowledgement do not replay older writes.
 
-Recurring tasks and events now respect the selected weekdays and inclusive Repeat from / Repeat until dates. Calendar → Remove items previews matching events and due todos between two dates before deleting them. Deleted occurrences stay removed; the repeat rule continues on other dates. Repeating events lets you edit or remove a complete local rule.
+The release workflow verifies core regressions, actual Electron IPC and Chromium UI, MCP, packaged native SQLite, and app startup on Windows x64, Intel Mac, and Apple Silicon Mac before publishing all installers together. Automated cloud and calendar checks use isolated protocol fixtures; live Turso and iCloud accounts are not exercised.
 
-This update also fixes calendar day and DST boundaries, all-day and overlapping events, recurrence edits, deleted-event resurrection, sync retries, profile-switch races, shared completion history, daily-note saving and focus timers.
-
-The release is gated on regression tests, Electron UI/IPC tests, note save/quit/reopen checks, MCP checks, native database checks and actual packaged-app startup on Windows x64, Intel Mac and Apple Silicon Mac. Live iCloud/Turso accounts are not part of automated tests.
-
-Windows installations can download the update automatically; Settings → Check for updates is also available.
-
-Mac downloads are supplied separately for Apple Silicon (`arm64`, M-series) and Intel (`x64`). Requires macOS 14 or newer. These builds are unsigned because no Apple Developer certificate is configured: automatic installation on Mac is unavailable. Quit Doneline and replace the app in Applications using the appropriate DMG. If macOS blocks the app, after placing this release in Applications run `xattr -cr /Applications/Doneline.app`. The new app checks for future releases and provides a download link.
+Windows supports automatic updates. Mac downloads require macOS 14 or newer. This release is unsigned because no Apple Developer certificate is available, so Mac updates open the download page and require manual installation.

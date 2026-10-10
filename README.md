@@ -12,8 +12,9 @@ reading our todos.
 
 ## What it does for us
 
-- **Today** is the home screen: everything happening today and everything left to
-  do, so the first thing I see in the morning is just "here's the day."
+- **Today** is the home screen: today's events and todos grouped into **Today,
+  Overdue, Upcoming, and No date**, each with a remaining count. Click a task's
+  date chip to reschedule it to today, tomorrow, a chosen date, or no date.
 - **Quick add** lets me type things the lazy way, like "gym tomorrow 9am", and it
   figures out the date on its own.
 - **Goals** are the bigger things we're chasing (run a marathon, finish the
@@ -24,7 +25,10 @@ reading our todos.
   events we share so they show up for both of us. Click a day to see everything on
   it.
   Repeats can use selected weekdays between two inclusive dates. **Repeating
-  events** edits a rule; editing a dated occurrence changes just that occurrence.
+  events** edits a rule. Preview the actual dates before saving, and choose to
+  change **this occurrence**, **this and future occurrences**, or the **entire
+  series**. Imported Apple Calendar series support those scopes for event details
+  and times; change their repeat frequency and date bounds in Apple Calendar.
   **Remove items** previews matching events and due todos between two dates before
   deleting them. Removed occurrences stay removed while the rule continues on
   the other dates.
@@ -36,6 +40,11 @@ reading our todos.
   the same moment and see each other's timer.
 - **Streaks** keep me honest, counting the days I hit my focus goal.
 - **Reminders** ping me about events and due todos so things stop slipping.
+- **Search** (Ctrl+K on Windows, Cmd+K on Mac) finds tasks, events, goals, and
+  daily notes and opens the exact result, including older notes.
+- **Your data** in Settings holds daily backups, manual backups, and restore.
+  Restore first makes a safety copy of the current workspace. Deleted tasks and
+  events stay in **Trash** on this computer for 30 days, with an immediate Undo.
 - **Claude** can do all of this for me too: I just ask, and it adds todos, makes
   events, checks things off, the works.
 
@@ -54,6 +63,17 @@ npm run dev     # open the app with live reload
 Checking off a todo updates the list and remaining count immediately. If saving
 fails, the todo returns with an error message. Calendar changes save locally and
 retry their iCloud sync in the background.
+Workspace changes also commit to ordinary local SQLite immediately. A durable
+queue retries cloud writes in the background; the Today status shows **Saved
+locally**, **Syncing**, or **Synced**, with an offline indicator when needed.
+The first connection to a shared workspace requires internet access to download
+its data. Each previously connected workspace can reopen and save offline.
+Simultaneous edits of the same item resolve to the last change pushed to the
+workspace; retries after a lost server acknowledgement do not replay old edits.
+Recurring-date exclusions merge independently, so deleting different dates on
+two offline computers keeps both dates deleted after sync. Undo restores its date.
+Backups and Trash are stored separately for each local workspace and stay on this
+computer. Automatic backups run on launch and each new day while Doneline is open.
 
 Validation uses isolated databases and mocked calendars; it never opens your
 normal data directory:

@@ -44,20 +44,21 @@ export function previewRemoval(input: RemovalRange): { events: CalEvent[]; todos
 }
 
 /** Exclusions written by deleteEvent/deleteTodo keep removed occurrences removed. */
-export function removeRange(input: RemovalRange): { events: number; todos: number } {
+export function removeRange(input: RemovalRange): { events: number; todos: number; trashIds?: string[] } {
   const db = getDb()
   const remove = () => removeInTransaction(input)
   return db.inTransaction ? remove() : db.transaction(remove).immediate()
 }
 
-function removeInTransaction(input: RemovalRange): { events: number; todos: number } {
+function removeInTransaction(input: RemovalRange): { events: number; todos: number; trashIds?: string[] } {
   const preview = previewRemoval(input)
   if (input.expectedIds) {
     const current = [...preview.events.map((e) => `events:${e.id}`), ...preview.todos.map((t) => `todos:${t.id}`)].sort()
     const expected = [...input.expectedIds].sort()
     if (JSON.stringify(current) !== JSON.stringify(expected)) throw new Error('The matching items changed. Preview them again before removing.')
   }
-  for (const event of preview.events) deleteEvent(event.id)
-  for (const todo of preview.todos) deleteTodo(todo.id)
-  return { events: preview.events.length, todos: preview.todos.length }
+  const trashIds: string[] = []
+  for (const event of preview.events) { const id = deleteEvent(event.id); if (id) trashIds.push(id) }
+  for (const todo of preview.todos) { const id = deleteTodo(todo.id); if (id) trashIds.push(id) }
+  return { events: preview.events.length, todos: preview.todos.length, ...(trashIds.length ? { trashIds } : {}) }
 }
