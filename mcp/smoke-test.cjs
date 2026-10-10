@@ -1,6 +1,7 @@
 // Behavioural test of the Doneline MCP server against a throwaway database.
 // Proves the two bugs that mattered: writes going to the wrong profile, and
 // zone-less dates landing on the wrong day.
+process.env.TZ = 'Europe/Paris'
 const { spawn } = require('child_process')
 const fs = require('fs')
 const path = require('path')
