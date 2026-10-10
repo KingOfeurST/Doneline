@@ -10,6 +10,8 @@ interface Props {
   onBack: () => void
   /** Re-run after a change so the goals list behind this page stays in step. */
   onChanged: () => void
+  onEdit: () => void
+  onDelete: () => void
 }
 
 interface Bundle {
@@ -51,11 +53,13 @@ function dayLabel(key: string): string {
   return date.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
 }
 
-export default function GoalDetail({ goal, onBack, onChanged }: Props) {
+export default function GoalDetail({ goal, onBack, onChanged, onEdit, onDelete }: Props) {
   const { active, personById } = useProfile()
   const combined = active === 'all'
   const [bundle, setBundle] = useState<Bundle | null>(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [editTodo, setEditTodo] = useState<TodoWithGoal | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const load = useCallback(async () => {
     setBundle(await api.todos.forGoal(goal.id))
@@ -94,15 +98,52 @@ export default function GoalDetail({ goal, onBack, onChanged }: Props) {
 
   return (
     <div className="space-y-8">
-      <button
-        onClick={onBack}
-        className="group flex items-center gap-1.5 text-sm font-bold text-slate-400 transition hover:text-ink"
-      >
-        <svg viewBox="0 0 20 20" className="h-4 w-4 transition group-hover:-translate-x-0.5" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M12 5l-5 5 5 5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        All goals
-      </button>
+      <div className="flex items-center justify-between gap-3">
+        <button
+          onClick={onBack}
+          className="group flex items-center gap-1.5 text-sm font-bold text-slate-400 transition hover:text-ink"
+        >
+          <svg viewBox="0 0 20 20" className="h-4 w-4 transition group-hover:-translate-x-0.5" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M12 5l-5 5 5 5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          All goals
+        </button>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onEdit}
+            className="rounded-xl px-3 py-1.5 text-sm font-bold text-slate-500 transition hover:bg-white/70 hover:text-ink"
+          >
+            Edit
+          </button>
+          {confirmDelete ? (
+            <span className="flex items-center gap-2">
+              <span className="text-sm font-bold text-rose-ink">
+                Delete this goal{total > 0 ? ` and its ${total} todo${total === 1 ? '' : 's'}` : ''}?
+              </span>
+              <button
+                onClick={onDelete}
+                className="rounded-xl bg-rose-ink px-3 py-1.5 text-sm font-bold text-white transition hover:brightness-110"
+              >
+                Delete
+              </button>
+              <button
+                onClick={() => setConfirmDelete(false)}
+                className="rounded-xl px-3 py-1.5 text-sm font-bold text-slate-500 transition hover:bg-white/70"
+              >
+                Keep
+              </button>
+            </span>
+          ) : (
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="rounded-xl px-3 py-1.5 text-sm font-bold text-slate-400 transition hover:bg-rose-card hover:text-rose-ink"
+            >
+              Delete
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Header. Not a card: the page itself carries the goal. */}
       <header className="space-y-5">
@@ -175,6 +216,7 @@ export default function GoalDetail({ goal, onBack, onChanged }: Props) {
                     onDelete={remove}
                     showOwner={combined}
                     hideGoal
+                    onEdit={setEditTodo}
                   />
                 ))}
               </div>
@@ -246,6 +288,7 @@ export default function GoalDetail({ goal, onBack, onChanged }: Props) {
                           onDelete={remove}
                           showOwner={combined}
                           hideGoal
+                          onEdit={setEditTodo}
                         />
                       ))}
                     </div>
@@ -258,14 +301,18 @@ export default function GoalDetail({ goal, onBack, onChanged }: Props) {
       )}
 
       <AddTodoModal
-        open={showAdd}
-        onClose={() => setShowAdd(false)}
+        open={showAdd || editTodo !== null}
+        onClose={() => {
+          setShowAdd(false)
+          setEditTodo(null)
+        }}
         onCreated={() => {
           load()
           onChanged()
         }}
         goalId={goal.id}
         ownerId={goal.person_id}
+        editTodo={editTodo}
       />
     </div>
   )

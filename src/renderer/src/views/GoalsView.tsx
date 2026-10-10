@@ -19,6 +19,7 @@ export default function GoalsView() {
   const [shared, setShared] = useState(false)
   const [addTodoGoal, setAddTodoGoal] = useState<{ id: string; ownerId: string } | null>(null)
   const [openGoalId, setOpenGoalId] = useState<string | null>(null)
+  const [editGoal, setEditGoal] = useState<Goal | null>(null)
 
   const load = useCallback(async () => {
     setGoals(await api.goals.list({ personId: queryPersonId }))
@@ -29,14 +30,36 @@ export default function GoalsView() {
     load()
   }, [load])
 
-  async function createGoal() {
+  async function saveGoal() {
     if (!title.trim()) return
-    await api.goals.create({ title, color, person_id: defaultOwnerId, shared })
+    if (editGoal) {
+      // `shared` is deliberately not editable: flipping it on a goal with
+      // existing completions would silently change what "done" means.
+      await api.goals.update(editGoal.id, { title, color })
+    } else {
+      await api.goals.create({ title, color, person_id: defaultOwnerId, shared })
+    }
     setTitle('')
     setColor(PALETTE[0].value)
     setShared(false)
     setShowAdd(false)
+    setEditGoal(null)
     load()
+  }
+
+  function startEditGoal(g: Goal) {
+    setEditGoal(g)
+    setTitle(g.title)
+    setColor(g.color)
+    setShared(g.shared === 1)
+  }
+
+  function closeGoalModal() {
+    setShowAdd(false)
+    setEditGoal(null)
+    setTitle('')
+    setColor(PALETTE[0].value)
+    setShared(false)
   }
 
   async function removeGoal(id: string) {
@@ -53,8 +76,77 @@ export default function GoalsView() {
   }
 
   const openGoal = goals.find((g) => g.id === openGoalId)
+
+  // Rendered in both branches: the detail page replaces the grid, so a modal
+  // living only in the grid's JSX could never open from the detail page.
+  const goalModal = (
+    <Modal
+      title={editGoal ? 'Edit goal' : 'New goal'}
+      open={showAdd || editGoal !== null}
+      onClose={closeGoalModal}
+    >
+      <div className="space-y-4">
+        <input
+          autoFocus
+          className="input"
+          placeholder="e.g. Run a marathon"
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && saveGoal()}
+        />
+        <div className="flex items-center gap-2">
+          {PALETTE.map((p) => (
+            <button
+              key={p.value}
+              onClick={() => setColor(p.value)}
+              aria-label={p.name}
+              className={`h-8 w-8 rounded-full border-2 transition ${
+                color === p.value ? 'scale-110 border-ink' : 'border-white'
+              }`}
+              style={{ background: p.value }}
+            />
+          ))}
+        </div>
+        {editGoal ? (
+          <p className="rounded-2xl bg-slate-50/70 p-3 text-sm font-semibold text-slate-500">
+            {shared
+              ? 'Shared: every todo here needs both of you. This cannot be changed later.'
+              : 'Personal goal. Sharing can only be set when the goal is created.'}
+          </p>
+        ) : (
+          <label className="flex items-center gap-2 rounded-2xl bg-slate-50/70 p-3 text-sm font-bold text-slate-600">
+            <input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} />
+            Shared: every todo must be done by both of you
+          </label>
+        )}
+        <div className="flex justify-end gap-3 pt-2">
+          <button className="btn-soft" onClick={closeGoalModal}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={saveGoal} disabled={!title.trim()}>
+            {editGoal ? 'Save changes' : 'Create'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+
   if (openGoal) {
-    return <GoalDetail goal={openGoal} onBack={() => setOpenGoalId(null)} onChanged={load} />
+    return (
+      <>
+        <GoalDetail
+          goal={openGoal}
+          onBack={() => setOpenGoalId(null)}
+          onChanged={load}
+          onEdit={() => startEditGoal(openGoal)}
+          onDelete={async () => {
+            await removeGoal(openGoal.id)
+            setOpenGoalId(null)
+          }}
+        />
+        {goalModal}
+      </>
+    )
   }
 
   return (
@@ -109,15 +201,6 @@ export default function GoalsView() {
                       👥 Shared
                     </span>
                   )}
-                </button>
-                <button
-                  onClick={() => removeGoal(g.id)}
-                  className="rounded-full p-1.5 text-slate-300 transition hover:bg-rose-50 hover:text-rose-ink"
-                  aria-label="Delete goal"
-                >
-                  <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M6 6l8 8M14 6l-8 8" strokeLinecap="round" />
-                  </svg>
                 </button>
               </div>
 
@@ -186,43 +269,8 @@ export default function GoalsView() {
         })}
       </div>
 
-      <Modal title="New goal" open={showAdd} onClose={() => setShowAdd(false)}>
-        <div className="space-y-4">
-          <input
-            autoFocus
-            className="input"
-            placeholder="e.g. Run a marathon"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && createGoal()}
-          />
-          <div className="flex items-center gap-2">
-            {PALETTE.map((p) => (
-              <button
-                key={p.value}
-                onClick={() => setColor(p.value)}
-                aria-label={p.name}
-                className={`h-8 w-8 rounded-full border-2 transition ${
-                  color === p.value ? 'scale-110 border-ink' : 'border-white'
-                }`}
-                style={{ background: p.value }}
-              />
-            ))}
-          </div>
-          <label className="flex items-center gap-2 rounded-2xl bg-slate-50/70 p-3 text-sm font-bold text-slate-600">
-            <input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} />
-            Shared — every todo must be done by both of you
-          </label>
-          <div className="flex justify-end gap-3 pt-2">
-            <button className="btn-soft" onClick={() => setShowAdd(false)}>
-              Cancel
-            </button>
-            <button className="btn-primary" onClick={createGoal} disabled={!title.trim()}>
-              Create
-            </button>
-          </div>
-        </div>
-      </Modal>
+
+      {goalModal}
 
       <AddTodoModal
         open={addTodoGoal !== null}

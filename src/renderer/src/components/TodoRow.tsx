@@ -11,6 +11,8 @@ interface Props {
   showOwner?: boolean
   /** Hide the goal chip where the goal is already the context, e.g. its own page. */
   hideGoal?: boolean
+  /** Clicking the title edits the todo. Omit to leave the title inert. */
+  onEdit?: (todo: TodoWithGoal) => void
   dragging?: boolean
   onDragStart?: () => void
   onDragEnter?: () => void
@@ -27,6 +29,7 @@ export default function TodoRow({
   reactions = [],
   showOwner,
   hideGoal,
+  onEdit,
   dragging,
   onDragStart,
   onDragEnter,
@@ -90,13 +93,25 @@ export default function TodoRow({
       </button>
 
       <div className="min-w-0 flex-1">
-        <p
-          className={`truncate font-bold ${
-            done ? 'text-slate-400 line-through' : pastDue ? 'text-rose-ink' : 'text-ink'
-          }`}
-        >
-          {todo.title}
-        </p>
+        {onEdit ? (
+          <button
+            onClick={() => onEdit(todo)}
+            title="Edit this todo"
+            className={`block w-full truncate text-left font-bold underline-offset-4 hover:underline ${
+              done ? 'text-slate-400 line-through' : pastDue ? 'text-rose-ink' : 'text-ink'
+            }`}
+          >
+            {todo.title}
+          </button>
+        ) : (
+          <p
+            className={`truncate font-bold ${
+              done ? 'text-slate-400 line-through' : pastDue ? 'text-rose-ink' : 'text-ink'
+            }`}
+          >
+            {todo.title}
+          </p>
+        )}
         {pastDue && <p className="text-xs font-bold text-rose-ink/80">Past due</p>}
       </div>
 

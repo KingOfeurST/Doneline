@@ -24,6 +24,7 @@ export default function TodayView() {
   const [showTodo, setShowTodo] = useState(false)
   const [showEvent, setShowEvent] = useState(false)
   const [editEvent, setEditEvent] = useState<CalEvent | null>(null)
+  const [editTodo, setEditTodo] = useState<TodoWithGoal | null>(null)
 
   // Drag-to-reorder state
   const dragId = useRef<string | null>(null)
@@ -178,6 +179,7 @@ export default function TodayView() {
                     onReact={react}
                     reactions={reactionsFor(t.id)}
                     showOwner={combined}
+                    onEdit={setEditTodo}
                   />
                 ))}
               </div>
@@ -198,6 +200,7 @@ export default function TodayView() {
                 onDragStart={() => { dragId.current = t.id }}
                 onDragEnter={() => setOverId(t.id)}
                 onDragEnd={handleDragEnd}
+                onEdit={setEditTodo}
               />
             ))}
           </div>
@@ -228,10 +231,14 @@ export default function TodayView() {
       </div>
 
       <AddTodoModal
-        open={showTodo}
-        onClose={() => setShowTodo(false)}
+        open={showTodo || editTodo !== null}
+        onClose={() => {
+          setShowTodo(false)
+          setEditTodo(null)
+        }}
         onCreated={load}
         ownerId={defaultOwnerId}
+        editTodo={editTodo}
       />
       <AddEventModal
         open={showEvent}

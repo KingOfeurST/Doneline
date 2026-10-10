@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import Modal from './Modal'
 import { api } from '../api'
-import type { Goal, Recurrence } from '../../../shared/api'
+import type { Goal, Recurrence, TodoWithGoal } from '../../../shared/api'
 import { useProfile } from '../profile'
-import { toISO, localDateInput } from '../lib/format'
+import { toISO, localDateInput, localTimeInput } from '../lib/format'
 import RecurrencePicker from './RecurrencePicker'
 
 interface Props {
@@ -13,9 +13,19 @@ interface Props {
   ownerId?: string
   /** Preselect a goal (used when adding from the Goals view). */
   goalId?: string
+  /** Pass a todo to edit it instead of creating a new one. */
+  editTodo?: TodoWithGoal | null
 }
 
-export default function AddTodoModal({ open, onClose, onCreated, ownerId, goalId: fixedGoal }: Props) {
+function safeRec(json: string): Recurrence | null {
+  try {
+    return JSON.parse(json) as Recurrence
+  } catch {
+    return null
+  }
+}
+
+export default function AddTodoModal({ open, onClose, onCreated, ownerId, goalId: fixedGoal, editTodo }: Props) {
   const { people } = useProfile()
   const [title, setTitle] = useState('')
   const [personId, setPersonId] = useState('')
@@ -32,6 +42,21 @@ export default function AddTodoModal({ open, onClose, onCreated, ownerId, goalId
   // refreshes from a background sync (that was wiping the selected goal).
   useEffect(() => {
     if (!open) return
+    if (editTodo) {
+      setPersonId(editTodo.person_id)
+      setTitle(editTodo.title)
+      setGoalId(editTodo.goal_id ?? '')
+      if (editTodo.due_at) {
+        const d = new Date(editTodo.due_at)
+        setDate(localDateInput(d))
+        setTime(localTimeInput(d))
+      } else {
+        setDate('')
+        setTime('')
+      }
+      setRecurrence(editTodo.recurrence ? safeRec(editTodo.recurrence) : null)
+      return
+    }
     setPersonId(ownerId || people[0]?.id || '')
     setTitle('')
     setGoalId(fixedGoal ?? '')
@@ -39,7 +64,7 @@ export default function AddTodoModal({ open, onClose, onCreated, ownerId, goalId
     setTime('')
     setRecurrence(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, editTodo])
 
   // Load the owner's goals (doesn't touch the current selection).
   useEffect(() => {
@@ -50,22 +75,33 @@ export default function AddTodoModal({ open, onClose, onCreated, ownerId, goalId
     if (!title.trim()) return
     setSaving(true)
     const due_at = date ? toISO(date, time || '09:00') : null
-    await api.todos.create({
-      title,
-      person_id: owner,
-      goal_id: goalId || null,
-      due_at,
-      recurrence: recurrence ? JSON.stringify(recurrence) : null
-    })
-    // A recurring todo is a template — generate today's instance immediately.
-    if (recurrence) await api.maintenance()
+    const rec = recurrence ? JSON.stringify(recurrence) : null
+    if (editTodo) {
+      await api.todos.update(editTodo.id, {
+        title,
+        person_id: owner,
+        goal_id: goalId || null,
+        due_at,
+        recurrence: rec
+      })
+    } else {
+      await api.todos.create({
+        title,
+        person_id: owner,
+        goal_id: goalId || null,
+        due_at,
+        recurrence: rec
+      })
+    }
+    // A recurring todo is a template; generate today's instance immediately.
+    if (rec) await api.maintenance()
     setSaving(false)
     onCreated()
     onClose()
   }
 
   return (
-    <Modal title="Add todo" open={open} onClose={onClose}>
+    <Modal title={editTodo ? 'Edit todo' : 'Add todo'} open={open} onClose={onClose}>
       <div className="space-y-4">
         <input
           autoFocus
@@ -118,7 +154,7 @@ export default function AddTodoModal({ open, onClose, onCreated, ownerId, goalId
             Cancel
           </button>
           <button className="btn-primary" onClick={submit} disabled={saving || !title.trim()}>
-            Add todo
+            {editTodo ? 'Save changes' : 'Add todo'}
           </button>
         </div>
       </div>
