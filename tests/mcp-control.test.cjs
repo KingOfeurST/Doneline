@@ -70,7 +70,9 @@ after(async () => {
   await Promise.all([...sessions].map(session => session.close()))
   assert.equal(path.dirname(path.resolve(temporary)), path.resolve(os.tmpdir()))
   assert.ok(path.basename(temporary).startsWith('doneline-mcp-control-'))
-  fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  // Windows may still be releasing native/child-process handles. Async retries
+  // let their close callbacks run instead of blocking them during cleanup.
+  await fs.promises.rm(temporary, { recursive: true, force: true, maxRetries: 15, retryDelay: 100 })
 })
 
 const iso = (day, time = '09:00') => new Date(`${day}T${time}:00`).toISOString()

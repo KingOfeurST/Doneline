@@ -1,4 +1,4 @@
-# Doneline 0.5.0
+# Doneline 0.5.1
 
 Adds assistant control through MCP and a local JSON CLI while keeping Doneline's interface.
 
