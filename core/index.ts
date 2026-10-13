@@ -35,7 +35,7 @@ export {
   DEFAULT_NOTIF_PREFS,
   type NotifPrefs
 } from './prefs.js'
-export { getDb, closeDb, initDb, reopenDb, cloudSync, isCloud, testWorkspace, getWorkspaceSyncStatus, onWorkspaceSyncStatus, activeDbPath, type WorkspaceSyncStatus } from './db.js'
+export { getDb, closeDb, shutdownDb, initDb, reopenDb, cloudSync, isCloud, testWorkspace, getWorkspaceSyncStatus, onWorkspaceSyncStatus, getWorkspaceRevision, activeDbPath, type WorkspaceSyncStatus } from './db.js'
 export { dataDir, dbPath } from './paths.js'
 
 /** Local YYYY-MM-DD for "today" (or a given date). */

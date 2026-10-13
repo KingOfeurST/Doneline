@@ -140,17 +140,32 @@ Doneline gets pushed up to that calendar. Each profile connects its own iCloud, 
 "Both" really is two real calendars side by side. (Our shared Doneline events are a
 separate, simpler thing that rides on the workspace above.)
 
-## Letting Claude run it
+## Letting an assistant run it
 
-Doneline ships a little MCP server so Claude can read and change my stuff directly.
+Doneline includes an MCP server and a JSON CLI that use the same database and
+selected profile as the desktop app. Codex, Claude, or another MCP client can
+read, plan, add, change, finish, and remove tasks, events, goals, and daily notes.
+Changes save locally first; cloud sync retries in the background. The open app
+refreshes when another process writes, including in local-only or offline mode.
 
 Build it once:
 
 ```bash
-npm run build:mcp     # creates out/mcp/server.cjs
+npm run build:mcp     # creates out/mcp/server.cjs and out/mcp/cli.cjs
 ```
 
-Then point Claude Desktop at it (`claude_desktop_config.json`) with a full path:
+Connect Codex using absolute paths:
+
+```powershell
+codex mcp add doneline -- 'C:\Program Files\nodejs\node.exe' 'C:\path\to\Doneline\out\mcp\server.cjs'
+```
+
+Start a new Codex session after adding the server. The CLI is immediately
+available in the current session, and repository `AGENTS.md` describes how to
+use it. The server reads your existing Doneline workspace configuration; tokens
+and calendar passwords do not belong in the client configuration.
+
+For Claude Desktop, use `claude_desktop_config.json` with a full path:
 
 ```json
 {
@@ -167,24 +182,86 @@ Then point Claude Desktop at it (`claude_desktop_config.json`) with a full path:
 Claude Desktop came from the Microsoft Store, the config lives in its sandboxed
 folder, not the usual `%APPDATA%\Claude`.)
 
-Restart Claude and it can use these:
+The tool catalog includes:
 
 | Tool | What it does |
 | --- | --- |
 | `list_today` | Everything for today in one go |
+| `status` / `select_profile` | Current profile, timezone, local database and sync status |
+| `plan_day` / `plan_week` | Exact dated work, events, goals, overdue and undated backlog, and counts |
+| `search` | Find tasks, events, goals, and historical daily notes |
 | `list_todos` / `add_todo` / `update_todo` / `complete_todo` / `delete_todo` | My todos (`add_todo` can repeat daily/weekly) |
 | `list_archived_todos` | The things I've already finished |
 | `list_goals` / `add_goal` | Goals (`shared: true` means we both have to finish them) |
 | `list_events` / `add_event` | Events (multi-day and repeating too) |
+| `update_event` / `get_event_series_context` | Edit one occurrence, this and future occurrences, or the whole series |
+| `preview_recurrence` / `generate_instances` | Preview actual repeat dates and materialize a bounded range |
+| `get_note` / `set_note` / `append_note` / `delete_note` | Read, replace, safely append, or clear daily notes |
+| `list_trash` / `restore_trash` | Recover task/event deletes and their recurring exclusions |
+| `list_backups` / `create_backup` / `restore_backup` | Local recovery, including a safety copy before restoring |
 | `list_people` / `add_person` | Profiles |
+| `delete_person` | Preview the permanent cascade; confirmed deletion first creates a safety backup |
 | `focus_stats` | My focus sessions, minutes, and streak |
 | `sync_calendar` | Sync with iCloud |
+| `sync_workspace` | Flush pending cloud writes and return the resulting sync state |
 | `remove_items_in_range` | Preview matching events/todos between inclusive dates, then delete only the reviewed IDs |
 | `run_maintenance` | Roll over recurring todos + tidy up finished ones |
 | `nudge_friend` | Poke my friend with a little notification |
 
 So I can just say "add a todo to call the landlord tomorrow at 10" or "what's on my
 plate today?" and it happens.
+
+The CLI uses those same tools and returns JSON:
+
+```powershell
+node out/mcp/cli.cjs status
+node out/mcp/cli.cjs today
+node out/mcp/cli.cjs week 2026-10-19
+node out/mcp/cli.cjs search "Thursday study"
+node out/mcp/cli.cjs tools add_todo
+node out/mcp/cli.cjs call add_todo --input todo.json
+node out/mcp/cli.cjs batch --input plan.json
+```
+
+Example `todo.json`:
+
+```json
+{"title":"Read 20 pages","due_at":"2026-10-15T17:00"}
+```
+
+Example `plan.json`:
+
+```json
+[
+  {"tool":"add_todo","args":{"title":"Prepare study notes","due_at":"2026-10-15T16:30"}},
+  {"tool":"add_event","args":{"title":"Study session","starts_at":"2026-10-15T17:00","ends_at":"2026-10-15T18:00"}}
+]
+```
+
+Use `--stdin` for UTF-8 piped JSON or `--data-dir PATH` for a separate workspace.
+Batches execute in order and stop on the first failure, returning the completed
+results; they are not atomic. Task/event deletes return Trash IDs. Goal/profile
+deletion creates a safety backup before its permanent cascade. Backup restore
+requires an explicit `confirm_restore: true` argument.
+
+Packaged Windows and Mac apps include the MCP/CLI bundles and runtime dependencies.
+They can run with the shipped Electron executable and `ELECTRON_RUN_AS_NODE=1`,
+avoiding a separate Node install. Register the installed app with Codex using
+its actual installation path. For a default Windows installation:
+
+```powershell
+codex mcp add doneline --env ELECTRON_RUN_AS_NODE=1 -- "$env:LOCALAPPDATA\Programs\Doneline\Doneline.exe" "$env:LOCALAPPDATA\Programs\Doneline\resources\app.asar.unpacked\out\mcp\server.cjs"
+```
+
+For macOS with Doneline in `/Applications`:
+
+```bash
+codex mcp add doneline --env ELECTRON_RUN_AS_NODE=1 -- '/Applications/Doneline.app/Contents/MacOS/Doneline' '/Applications/Doneline.app/Contents/Resources/app.asar.unpacked/out/mcp/server.cjs'
+```
+
+To use the CLI, run the same executable with the sibling `cli.cjs` path followed
+by a command, with `ELECTRON_RUN_AS_NODE=1` set in that process's environment.
+Source checkout commands require Node 22.12 or newer.
 
 ## How it's put together
 

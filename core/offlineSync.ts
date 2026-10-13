@@ -68,7 +68,8 @@ export function syncEndpoint(syncUrl: string): string {
 
 /** Minimal official Hrana HTTP batch: dependent steps + conditional rollback
  * ensure that a failed statement never leaves a partially committed write. */
-export async function remoteTransaction(cfg: SyncConfig, statements: SyncStatement[], write = true): Promise<Row[][]> {
+export async function remoteTransaction(cfg: SyncConfig, statements: SyncStatement[], write = true, signal?: AbortSignal): Promise<Row[][]> {
+  signal?.throwIfAborted()
   const encode = (value: string | number | null) => value === null ? { type: 'null' } : typeof value === 'string'
     ? { type: 'text', value } : Number.isInteger(value) ? { type: 'integer', value: String(value) } : { type: 'float', value }
   const input = [{ sql: write ? 'BEGIN IMMEDIATE' : 'BEGIN' }, ...statements, { sql: 'COMMIT' }]
@@ -80,7 +81,7 @@ export async function remoteTransaction(cfg: SyncConfig, statements: SyncStateme
   const response = await fetch(syncEndpoint(cfg.syncUrl), {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.authToken}` },
     body: JSON.stringify({ baton: null, requests: [{ type: 'batch', batch: { steps } }, { type: 'close' }] }),
-    signal: AbortSignal.timeout(10_000), redirect: 'error'
+    signal: signal ? AbortSignal.any([AbortSignal.timeout(10_000), signal]) : AbortSignal.timeout(10_000), redirect: 'error'
   })
   if (!response.ok) throw new Error(response.status === 401 || response.status === 403 ? 'Workspace access was rejected. Check your connect code.' : `Workspace unavailable (HTTP ${response.status}).`)
   const payload = await response.json() as {
@@ -102,8 +103,8 @@ export async function remoteTransaction(cfg: SyncConfig, statements: SyncStateme
   })
 }
 
-async function ensureRemoteSchema(cfg: SyncConfig, definitions: Table[]): Promise<void> {
-  const existing = await remoteTransaction(cfg, definitions.map((t) => ({ sql: `PRAGMA table_info(${ident(t.name)})` })), false)
+async function ensureRemoteSchema(cfg: SyncConfig, definitions: Table[], signal?: AbortSignal): Promise<void> {
+  const existing = await remoteTransaction(cfg, definitions.map((t) => ({ sql: `PRAGMA table_info(${ident(t.name)})` })), false, signal)
   const statements: SyncStatement[] = []
   definitions.forEach((t, i) => {
     if (!existing[i].length) statements.push({ sql: t.sql.replace(/^CREATE TABLE /i, 'CREATE TABLE IF NOT EXISTS ') })
@@ -114,7 +115,7 @@ async function ensureRemoteSchema(cfg: SyncConfig, definitions: Table[]): Promis
     }
   })
   statements.push({ sql: 'CREATE TABLE IF NOT EXISTS doneline_sync_operations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime(\'now\')))' })
-  await remoteTransaction(cfg, statements)
+  await remoteTransaction(cfg, statements, true, signal)
 }
 
 function mutation(change: Change, table: Table): SyncStatement {
@@ -180,10 +181,11 @@ function pullSnapshot(db: DB, definitions: Table[], snapshot: Row[][]): void {
 
 /** Flush durable operations before pulling. The server records each operation in
  * its transaction, making retries safe after a lost acknowledgement. */
-export async function syncOfflineWorkspace(db: DB, cfg: SyncConfig, verifyLease: () => void = () => {}): Promise<void> {
+export async function syncOfflineWorkspace(db: DB, cfg: SyncConfig, verifyLease: () => void = () => {}, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
   verifyLease()
   const definitions = tables(db)
-  await ensureRemoteSchema(cfg, definitions)
+  await ensureRemoteSchema(cfg, definitions, signal)
   verifyLease()
   const pending = db.prepare('SELECT * FROM __sync_outbox ORDER BY seq').all() as Change[]
   // Avoid packet growth from repeatedly typing into the same note; each final row
@@ -236,7 +238,7 @@ export async function syncOfflineWorkspace(db: DB, cfg: SyncConfig, verifyLease:
     const send = async () => {
       if (!batch.length) return
       verifyLease()
-      await remoteTransaction(cfg, statements)
+      await remoteTransaction(cfg, statements, true, signal)
       verifyLease()
       const keys = new Set(batch.map((change) => `${change.table_name}:${change.key_json}`))
       db.transaction(() => {
@@ -254,7 +256,7 @@ export async function syncOfflineWorkspace(db: DB, cfg: SyncConfig, verifyLease:
     await send()
   }
   verifyLease()
-  const snapshot = await remoteTransaction(cfg, definitions.map((t) => ({ sql: `SELECT * FROM ${ident(t.name)}` })), false)
+  const snapshot = await remoteTransaction(cfg, definitions.map((t) => ({ sql: `SELECT * FROM ${ident(t.name)}` })), false, signal)
   verifyLease()
   pullSnapshot(db, definitions, snapshot)
 }

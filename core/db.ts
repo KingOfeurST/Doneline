@@ -19,6 +19,7 @@ let _syncInFlight: Promise<boolean> | null = null
 let _initInFlight: Promise<void> | null = null
 let _initialized = false
 let _syncRequested = false
+let _shutdownController = new AbortController()
 let _lastSyncError: string | null = null
 let _syncing = false
 const syncListeners = new Set<(status: WorkspaceSyncStatus) => void>()
@@ -349,6 +350,8 @@ function applySchema(db: DB, seed = true): void {
  * re-seed people that already exist), then pushes any local changes back.
  */
 async function initialize(): Promise<void> {
+  const signal = _shutdownController.signal
+  signal.throwIfAborted()
   if (!_db) _db = openConnection()
   applySchema(_db, !_cloud)
   if (_cloud) {
@@ -361,6 +364,7 @@ async function initialize(): Promise<void> {
       let synchronized = await cloudSync()
       const waitDeadline = Date.now() + 30_000
       while (!synchronized && !_db.prepare('SELECT 1 FROM people LIMIT 1').get()) {
+        signal.throwIfAborted()
         if (Date.now() >= waitDeadline) throw new Error('Another Doneline process is setting up this workspace. Try again shortly.')
         await new Promise(resolve => setTimeout(resolve, 100))
         synchronized = await cloudSync()
@@ -374,7 +378,7 @@ async function initialize(): Promise<void> {
         await remoteTransaction(cfg, [
           { sql: 'INSERT OR IGNORE INTO people(id,name,color,emoji,position) VALUES (?,?,?,?,?)', args: [me, 'Me', '#2f7a4d', '🙂', 0] },
           { sql: 'INSERT OR IGNORE INTO people(id,name,color,emoji,position) VALUES (?,?,?,?,?)', args: [friend, 'Friend', '#9c4a4a', '🧑', 1] }
-        ])
+        ], true, signal)
         await cloudSync()
       }
       applySchema(_db)
@@ -405,6 +409,7 @@ export function getDb(): DB {
 
 /** Pull + push with the shared workspace. No-op (returns false) in local mode. */
 export function cloudSync(): Promise<boolean> {
+  if (_shutdownController.signal.aborted) return Promise.resolve(false)
   if (!_db || !_cloud) return Promise.resolve(false)
   if (_syncInFlight) {
     _syncRequested = true
@@ -412,6 +417,7 @@ export function cloudSync(): Promise<boolean> {
   }
   const connection = _db
   const cfg = _openedSyncConfig
+  const signal = _shutdownController.signal
   if (!cfg) return Promise.resolve(false)
   _syncInFlight = Promise.resolve().then(async () => {
     // Desktop and MCP share one file. A lease prevents an older remote snapshot
@@ -438,7 +444,7 @@ export function cloudSync(): Promise<boolean> {
       let loops = 0
       do {
         _syncRequested = false
-        await syncOfflineWorkspace(connection, cfg, verifyLease)
+        await syncOfflineWorkspace(connection, cfg, verifyLease, signal)
         const pendingBeforeBackfill = pendingSyncChanges(connection)
         // A fresh device can receive old JSON exclusions in its first pull.
         // Promote those dates only when no independent date record exists.
@@ -464,6 +470,13 @@ export function cloudSync(): Promise<boolean> {
 
 export function isCloud(): boolean {
   return _cloud
+}
+
+/** Observe other connections without opening a DB during workspace transitions. */
+export function getWorkspaceRevision(): { databasePath: string; dataVersion: number } | null {
+  if (!_db || !_initialized || !_openedPath) return null
+  const row = _db.prepare('PRAGMA data_version').get() as { data_version: number }
+  return { databasePath: _openedPath, dataVersion: row.data_version }
 }
 
 export function getWorkspaceSyncStatus(): WorkspaceSyncStatus {
@@ -498,6 +511,15 @@ export function closeDb(): void {
   }
   _openedPath = null
   _openedSyncConfig = null
+}
+
+/** Abort network work before closing so our cross-process lease is released.
+ * Durable outbox entries stay available for the desktop or next CLI invocation. */
+export async function shutdownDb(): Promise<void> {
+  _shutdownController.abort(new Error('Doneline is shutting down. Pending changes remain saved locally.'))
+  await Promise.allSettled([_initInFlight, _syncInFlight].filter((operation): operation is Promise<void> | Promise<boolean> => !!operation))
+  closeDb()
+  _shutdownController = new AbortController()
 }
 
 /** Re-open after the workspace connection changed (connect / disconnect). */

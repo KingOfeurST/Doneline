@@ -32,6 +32,8 @@ import {
   isCloud,
   syncCalendar,
   getCalDavConfig,
+  getWorkspaceRevision,
+  getSelfPersonId,
   listPeople,
   runMaintenance,
   localDay,
@@ -45,6 +47,7 @@ let tray: Tray | null = null
 let isQuitting = false
 let syncTimer: NodeJS.Timeout | null = null
 let maintenanceTimer: NodeJS.Timeout | null = null
+let externalChangesTimer: NodeJS.Timeout | null = null
 let updates: UpdateController | null = null
 const quitCoordinator = new QuitCoordinator()
 let quitInFlight = false
@@ -252,6 +255,27 @@ function startCloudSyncLoop(): void {
   }, 8000)
 }
 
+/** MCP/CLI commits use another connection; refresh views even without cloud sync. */
+function observeExternalChanges(): void {
+  if (externalChangesTimer) clearInterval(externalChangesTimer)
+  let previous = getWorkspaceRevision()
+  let previousSelf = getSelfPersonId()
+  externalChangesTimer = setInterval(() => {
+    try {
+      const current = getWorkspaceRevision()
+      if (!current) { previous = null; return }
+      const currentSelf = getSelfPersonId()
+      if (previous && (current.databasePath !== previous.databasePath || current.dataVersion !== previous.dataVersion || currentSelf !== previousSelf)) {
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send(EVT.workspaceChanged)
+        }
+      }
+      previous = current
+      previousSelf = currentSelf
+    } catch { /* A closing or initializing connection is retried on the next poll. */ }
+  }, 500)
+}
+
 app.whenReady().then(async () => {
   if (!primaryInstance) return
   Menu.setApplicationMenu(null) // hide the default File/Edit/View/Window/Help bar
@@ -268,6 +292,7 @@ app.whenReady().then(async () => {
     try { purgeTrash(); ensureDailyBackup() }
     catch (error) { console.error('[doneline] workspace backup failed:', error) }
   })
+  observeExternalChanges()
   ipcMain.handle(CH.toggleFullscreen, () => {
     if (!mainWindow) return false
     const fs = !mainWindow.isFullScreen()
@@ -392,6 +417,7 @@ app.on('will-quit', () => {
   isQuitting = true
   if (syncTimer) clearInterval(syncTimer)
   if (maintenanceTimer) clearInterval(maintenanceTimer)
+  if (externalChangesTimer) clearInterval(externalChangesTimer)
   updates?.dispose()
   stopNotifications()
   closeDb()

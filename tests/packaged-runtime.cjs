@@ -251,6 +251,58 @@ async function runLaunchProbe(application, directory) {
   }
 }
 
+function runAgentProbe(application, directory) {
+  const env = { ...isolatedEnvironment(directory), ELECTRON_RUN_AS_NODE: '1', DONELINE_DB: path.join(directory, 'agent.db') }
+  const cli = path.join(`${application.archive}.unpacked`, 'out', 'mcp', 'cli.cjs')
+  const dependencyProbe = path.join(directory, 'agent-dependencies.cjs')
+  const { createHash } = require('node:crypto')
+  const expectedHashes = Object.fromEntries(['server.cjs', 'cli.cjs'].map(name => [name,
+    createHash('sha256').update(fs.readFileSync(path.join(root, 'out', 'mcp', name))).digest('hex')]))
+  fs.writeFileSync(dependencyProbe, [
+    "const assert=require('node:assert/strict'); const path=require('node:path');",
+    `const archive=${JSON.stringify(application.archive)};`,
+    "const sdk=require.resolve('@modelcontextprotocol/sdk/client/index.js',{paths:[archive]});",
+    "assert.ok(sdk.startsWith(archive+path.sep),'MCP SDK must be inside the shipped app, not a developer checkout: '+sdk);",
+    "const{createRequire}=require('node:module');const agentRequire=createRequire(path.join(archive+'.unpacked','out','mcp','server.cjs'));",
+    "for(const dependency of ['libsql','@neon-rs/load','detect-libc'])assert.ok(agentRequire.resolve(dependency).startsWith(archive+'.unpacked'+path.sep),'Agent dependency must resolve inside the unpacked app: '+dependency);",
+    "const Database=agentRequire('libsql');const db=new Database(':memory:');assert.equal(db.prepare('SELECT 1 AS value').get().value,1);db.close();",
+    `const expected=${JSON.stringify(expectedHashes)};`,
+    "const fs=require('node:fs');const{createHash}=require('node:crypto');for(const[name,hash]of Object.entries(expected))assert.equal(createHash('sha256').update(fs.readFileSync(path.join(archive+'.unpacked','out','mcp',name))).digest('hex'),hash,'Packaged agent must match the tested source: '+name);",
+    "console.log('Packaged agent dependencies passed: MCP SDK resolves inside app.asar.');"
+  ].join('\n'))
+  const dependencies = spawnSync(application.executable, [dependencyProbe], { env, stdio: 'inherit', windowsHide: true, timeout: 25000 })
+  if (dependencies.error) throw dependencies.error
+  assert.equal(dependencies.status, 0, 'Packaged agent dependencies must load')
+  function command(args) {
+    const result = spawnSync(application.executable, [cli, ...args], { env, encoding: 'utf8', windowsHide: true, timeout: 25000 })
+    if (result.error) throw result.error
+    assert.equal(result.status, 0, 'Packaged CLI failed: ' + result.stderr + result.stdout)
+    const response = JSON.parse(result.stdout)
+    assert.equal(response.ok, true)
+    return response.data
+  }
+  function call(tool, args = {}) {
+    const input = path.join(directory, 'agent-request.json')
+    fs.writeFileSync(input, JSON.stringify(args), 'utf8')
+    return command(['call', tool, '--input', input])
+  }
+  const status = command(['status'])
+  assert.equal(status.version, pkg.version)
+  assert.equal(status.sync.cloud, false, 'Packaged agent smoke must use private local data')
+  assert.equal(status.profiles.length, 2)
+  const todo = call('add_todo', { title: 'Packaged assistant task café 🌙' })
+  assert.equal(todo.person_id, status.profile.id)
+  assert.equal(call('get_todo', { id: todo.id }).title, todo.title)
+  const receipt = call('delete_todo', { id: todo.id })
+  assert.equal(typeof receipt.trash_id, 'string')
+  call('restore_trash', { id: receipt.trash_id })
+  assert.equal(call('get_todo', { id: todo.id }).title, todo.title)
+  call('append_note', { day: status.day, body: 'Packaged note café 🌙' })
+  assert.equal(call('get_note', { day: status.day }).body, 'Packaged note café 🌙')
+  assert.equal(call('create_backup').reason, 'manual')
+  console.log('Packaged MCP/CLI passed: shipped runtime/SDK, persistent tasks and notes, Trash restoration and backup.');
+}
+
 async function main() {
   const args = process.argv.slice(2)
   let explicit = process.env.DONELINE_PACKAGED_APP
@@ -265,6 +317,7 @@ async function main() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'doneline-packaged-test-'))
   try {
     runNativeProbe(application, directory)
+    runAgentProbe(application, directory)
     if (launch) await runLaunchProbe(application, directory)
   } finally {
     const resolved = path.resolve(directory)

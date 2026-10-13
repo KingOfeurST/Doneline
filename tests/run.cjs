@@ -9,7 +9,7 @@ const root = path.resolve(__dirname, '..')
 require('electron')
 const output = path.join(root, 'out', 'tests', 'ui-state.test.cjs')
 buildSync({ entryPoints: [path.join(__dirname, 'ui-state.test.ts')], bundle: true, platform: 'node', format: 'cjs', outfile: output })
-const electronTests = ['data-renderer.test.cjs', 'planning-search-renderer.test.cjs', 'note-quit.test.cjs', 'ipc.test.cjs', 'renderer.test.cjs']
+const electronTests = ['data-renderer.test.cjs', 'planning-search-renderer.test.cjs', 'note-quit.test.cjs', 'external-writes.test.cjs', 'ipc.test.cjs', 'renderer.test.cjs']
 const tests = fs.readdirSync(__dirname).filter((name) => name.endsWith('.test.cjs') && !electronTests.includes(name))
   .sort()
   .map((name) => path.join(__dirname, name))
