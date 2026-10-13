@@ -10,7 +10,9 @@ require('electron')
 const output = path.join(root, 'out', 'tests', 'ui-state.test.cjs')
 buildSync({ entryPoints: [path.join(__dirname, 'ui-state.test.ts')], bundle: true, platform: 'node', format: 'cjs', outfile: output })
 const electronTests = ['data-renderer.test.cjs', 'planning-search-renderer.test.cjs', 'note-quit.test.cjs', 'external-writes.test.cjs', 'ipc.test.cjs', 'renderer.test.cjs']
-const tests = fs.readdirSync(__dirname).filter((name) => name.endsWith('.test.cjs') && !electronTests.includes(name))
+const processTests = ['mcp-control.test.cjs', 'cli-control.test.cjs']
+const integrationTests = [...processTests, ...electronTests]
+const tests = fs.readdirSync(__dirname).filter((name) => name.endsWith('.test.cjs') && !integrationTests.includes(name))
   .sort()
   .map((name) => path.join(__dirname, name))
 function run(arguments_, timeout) {
@@ -19,6 +21,7 @@ function run(arguments_, timeout) {
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 run(['--test', ...tests, output], 120000)
-// Chromium launches and production bundles are expensive on busy computers.
+// MCP/CLI subprocesses, Chromium launches and production bundles compete for
+// CPU and disk on busy computers, including hosted Windows runners.
 // Keep each integration family separate without loosening its assertions or deadlines.
-for (const name of electronTests) run([path.join(__dirname, name)], name === 'ipc.test.cjs' ? 60000 : 75000)
+for (const name of integrationTests) run([path.join(__dirname, name)], name === 'ipc.test.cjs' ? 60000 : 75000)
