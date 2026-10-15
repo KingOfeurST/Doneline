@@ -40,6 +40,10 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
   const revision = useRef(0)
   const requestId = useRef(0)
   const writing = useRef(new Map<number, Promise<void>>())
+  const loadingNote = useRef(true)
+  const focused = useRef(false)
+  const refreshPending = useRef(false)
+  const refreshing = useRef(false)
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const areaRef = useRef<HTMLTextAreaElement>(null)
@@ -47,6 +51,38 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
   // writes the right thing even after the day or profile has changed.
   const pending = useRef<{ body: string; revision: number } | null>(null)
   const draftKey = `doneline.noteDraft:${day}:${personId}`
+
+  // A sync received while typing or saving still needs to be read once this
+  // editor is clean. Keep it queued until blur and the latest save have settled.
+  const refreshIfReady = useCallback(function refreshIfReady() {
+    if (!mounted.current || !refreshPending.current || refreshing.current || loadingNote.current
+      || pending.current || writing.current.size > 0 || focused.current
+      || document.activeElement === areaRef.current) return
+    refreshPending.current = false
+    refreshing.current = true
+    const request = ++requestId.current
+    const currentRevision = revision.current
+    let received = false
+    api.notes.get(day, personId).then((n) => {
+      received = true
+      if (!mounted.current) return
+      if (request !== requestId.current || currentRevision !== revision.current || pending.current
+        || writing.current.size > 0 || focused.current || document.activeElement === areaRef.current) {
+        refreshPending.current = true
+        return
+      }
+      setBody((cur) => n.body === cur ? cur : n.body)
+      setLoadFailed(false)
+      setError('')
+    }).catch(() => {
+      if (mounted.current) refreshPending.current = true
+    }).finally(() => {
+      refreshing.current = false
+      // Retry a superseded read when clean, but a failed request waits for the
+      // next blur, save, or sync rather than starting an endless retry loop.
+      if (received) refreshIfReady()
+    })
+  }, [day, personId])
 
   /** Write immediately and drop the pending debounce. */
   const flush = useCallback(() => {
@@ -59,6 +95,7 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
     const existing = writing.current.get(p.revision)
     if (existing) return existing
     requestId.current++
+    let savedLatest = false
     // Serialize writes to this note so an earlier slow save cannot arrive last.
     const operation = queueNoteWrite(draftKey, async () => {
         const persisted = await api.notes.set(day, p.body, personId)
@@ -67,6 +104,7 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
         }
         if (pending.current?.revision !== p.revision) return
         pending.current = null
+        savedLatest = true
         forgetNoteDraft(draftKey, p.revision)
         try {
           if (localStorage.getItem(draftKey) === p.body) localStorage.removeItem(draftKey)
@@ -85,10 +123,13 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
         }
         throw cause
       })
-      .finally(() => writing.current.delete(p.revision))
+      .finally(() => {
+        writing.current.delete(p.revision)
+        if (savedLatest) refreshIfReady()
+      })
     writing.current.set(p.revision, operation)
     return operation
-  }, [day, personId, draftKey])
+  }, [day, personId, draftKey, refreshIfReady])
 
   // Load when the day or the selected person changes. Flush first so text typed
   // just before the switch is saved against the note it was written for.
@@ -141,25 +182,23 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
         }
       }
     }).finally(() => {
-      if (!cancelled) setLoading(false)
+      if (!cancelled) {
+        loadingNote.current = false
+        setLoading(false)
+        refreshIfReady()
+      }
     })
     return () => { cancelled = true }
-  }, [day, personId, draftKey, flush])
+  }, [day, personId, draftKey, flush, refreshIfReady])
 
   // A background sync may carry the other person's edits. Only pull them in when
   // this note has nothing unsaved and isn't being typed in, so a refresh can
   // never stomp the cursor or discard local text.
   useEffect(() => {
     if (!day || !personId || tick === 0) return
-    if (pending.current || writing.current.size > 0 || loading) return
-    if (document.activeElement === areaRef.current) return
-    const request = ++requestId.current
-    const currentRevision = revision.current
-    api.notes.get(day, personId).then((n) => {
-      if (!mounted.current || request !== requestId.current || currentRevision !== revision.current || pending.current) return
-      setBody((cur) => n.body === cur ? cur : n.body)
-    }).catch(() => {})
-  }, [tick, day, personId, loading])
+    refreshPending.current = true
+    refreshIfReady()
+  }, [tick, day, personId, refreshIfReady])
 
   // Save on unmount (tab switch) and on window close — a debounce that is merely
   // cancelled would silently discard the last keystrokes.
@@ -228,6 +267,17 @@ function NoteEditor({ day, personId, owner, compact = false }: Props) {
         disabled={loading || loadFailed}
         aria-label={owner ? `${owner.name}'s note` : 'Daily note'}
         onChange={(e) => edit(e.target.value)}
+        onFocus={() => {
+          focused.current = true
+          if (refreshing.current) {
+            requestId.current++
+            refreshPending.current = true
+          }
+        }}
+        onBlur={() => {
+          focused.current = false
+          queueMicrotask(refreshIfReady)
+        }}
         placeholder={'Brain dump, plans, how today went…'}
         spellCheck={false}
         className={`${compact ? 'min-h-[168px]' : 'min-h-[320px]'} flex-1 resize-none bg-transparent px-5 py-4 text-[15px] font-medium leading-7 text-amber-950 outline-none placeholder:font-semibold placeholder:text-amber-700/35`}

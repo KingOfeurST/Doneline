@@ -39,7 +39,7 @@ if (!process.versions.electron) {
       events:[event('alpha','Overlap alpha',at(today,9),at(today,11)),event('beta','Overlap beta',at(today,10),at(today,12)),event('overnight','Overnight fixture',at(dayKey(previous),23),at(today,2)),event('late','Late fixture',at(today,23,30),at(dayKey(tomorrow),0,30)),event('all-day','All-day fixture',at(today,0),at(dayKey(tomorrow),0),1)],
       templates:[event('rule','Thursday class',at('2026-10-01',9),at('2026-10-01',10))],
       removal:{events:[event('remove-event','Thursday class',at('2026-10-08',9),at('2026-10-08',10))],todos:[todo('remove-todo','Class prep',at('2026-10-08',8))]},
-      notes:{self:'',friend:''}, deferNotes:false, noteLoadError:false,
+      notes:{self:'',friend:''}, deferNotes:false, noteLoadError:false, deferNoteReads:false, pendingNoteReads:[], unassignedNotes:[],
       finishToggle(id,fail=false) {
         const pending=this.pendingToggles.find(p=>p.id===id); if(!pending) throw Error('No pending toggle '+id);
         this.pendingToggles=this.pendingToggles.filter(p=>p!==pending);
@@ -75,7 +75,7 @@ if (!process.versions.electron) {
       trash:{list:async()=>[],restore:async()=>({kind:'task',itemIds:['id'],personId:'self'})},
       reactions:{list:async()=>[],toggle:async()=>true},
       focus:{record:async input=>{record('focus.record',input);return true;},tray:()=>{},getTarget:async()=>4,stats:async()=>({streak:0,todaySessions:0,weekMinutes:0,weekSessions:0,target:4,targetMet:false}),sharedStreak:async()=>0},
-      notes:{get:async(day,personId)=>{if(fixture.noteLoadError)throw Error('Fixture note read failed');return {day,person_id:personId,body:fixture.notes[personId]||'',updated_at:new Date().toISOString()};},set:(day,body,personId)=>{record('notes.set',{day,body,personId});return new Promise((resolve,reject)=>fixture.noteSaves.push({resolve,reject,day,body,personId}));}},
+      notes:{days:async(personId)=>fixture.notes[personId]?.trim()?[today]:[],unassigned:async()=>fixture.unassignedNotes.map(note=>({...note})),get:async(day,personId)=>{if(fixture.noteLoadError)throw Error('Fixture note read failed');const note={day,person_id:personId,body:fixture.notes[personId]||'',updated_at:new Date().toISOString()};if(fixture.deferNoteReads)return new Promise(resolve=>fixture.pendingNoteReads.push({resolve,note}));return note;},set:(day,body,personId)=>{record('notes.set',{day,body,personId});return new Promise((resolve,reject)=>fixture.noteSaves.push({resolve,reject,day,body,personId}));}},
       todos:{
         today:async()=>fixture.todos.map(t=>({...t})),planned:async()=>fixture.todos.map(t=>({...t})),list:async()=>fixture.todos.map(t=>({...t})),
         toggle:(id,done)=>{record('todos.toggle',{id,done});return new Promise((resolve,reject)=>fixture.pendingToggles.push({id,done,resolve,reject}));},
@@ -131,13 +131,15 @@ if (!process.versions.electron) {
     await win.loadURL('about:blank')
     win.webContents.debugger.attach('1.3')
     await win.webContents.debugger.sendCommand('Emulation.setTimezoneOverride', { timezoneId: 'Europe/Paris' })
+    // Hidden windows otherwise change activeElement without focusin/focusout.
+    await win.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true })
     await win.loadFile(path.join(temporary, 'index.html'))
     const evaluate = (fn, value) => win.webContents.executeJavaScript(`(${fn.toString()})(${JSON.stringify(value)})`)
     const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds))
     async function until(fn, label, timeout = 5000) {
       const deadline = Date.now() + timeout
       while (Date.now() < deadline) { if (await evaluate(fn)) return; await wait(30) }
-      throw new Error(`Timed out: ${label}`)
+      throw new Error(`Timed out: ${label}; ${await evaluate(() => JSON.stringify({notes:__fixture.notes,areas:[...document.querySelectorAll('textarea')].map(area=>({label:area.getAttribute('aria-label'),value:area.value,active:area===document.activeElement})),focus:__fixture.focusEvents,errors:__fixture.errors}))}`)
     }
     const click = text => evaluate(text => {
       const button = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === text)
@@ -341,6 +343,15 @@ if (!process.versions.electron) {
     await until(() => document.querySelector('[aria-label="1 todos left"]') && document.querySelector('[role="alert"]')?.textContent.includes('Fixture save failed'), 'failure rolls back todo and count')
 
     await until(() => document.querySelector('textarea') && !document.querySelector('textarea').disabled, 'note initial load')
+    await evaluate(() => { __fixture.focusEvents=[];for(const type of ['focus','focusin','blur','focusout'])document.addEventListener(type,event=>__fixture.focusEvents.push({type,target:event.target.getAttribute('aria-label'),active:document.activeElement?.getAttribute('aria-label'),hasFocus:document.hasFocus()}),true);document.querySelector('textarea').focus();__fixture.notes.self='Synced while focused';__fixture.triggerChange(); })
+    await wait(100)
+    assert.equal(await evaluate(() => document.querySelector('textarea').value), '', 'focused clean note does not move the cursor during sync')
+    await evaluate(() => { document.querySelector('textarea').blur(); })
+    await until(() => document.querySelector('textarea').value === 'Synced while focused', 'blur applies a deferred sync without another workspace event')
+    await evaluate(() => { __fixture.deferNoteReads=true;__fixture.triggerChange(); })
+    await until(() => __fixture.pendingNoteReads.some(pending=>pending.note.person_id==='self'), 'background note read held before focus')
+    await evaluate(() => { const area=document.querySelector('textarea');area.focus();area.blur();__fixture.notes.self='Fresh after focus changed';__fixture.deferNoteReads=false;__fixture.pendingNoteReads.splice(0).forEach(pending=>pending.resolve(pending.note)); })
+    await until(() => document.querySelector('textarea').value === 'Fresh after focus changed', 'pre-focus response cannot strand the note after blur')
     await input('textarea', 'First note draft')
     await until(() => __fixture.noteSaves.length === 1, 'first debounced note write')
     await input('textarea', 'Newer note draft')

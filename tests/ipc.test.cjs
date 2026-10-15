@@ -25,7 +25,7 @@ if (!process.versions.electron) {
   const main = path.join(temporary, 'ipc.cjs')
   const preload = path.join(temporary, 'preload.cjs')
   // Deliberately stalled network proves mutations return without awaiting sync.
-  buildSync({ stdin: { contents: `export { registerIpc } from './src/main/ipc'; export { closeDb } from './core/db'; export { CH } from './src/shared/channels';`, resolveDir: root, loader: 'ts' },
+  buildSync({ stdin: { contents: `export { registerIpc } from './src/main/ipc'; export { closeDb, getDb } from './core/db'; export { CH } from './src/shared/channels';`, resolveDir: root, loader: 'ts' },
     bundle: true, platform: 'node', format: 'cjs', external: ['electron', 'libsql'],
     alias: { tsdav: path.join(root, 'tests/fixtures/stalled-dav.cjs') },
     banner: { js: `module.paths.unshift(${JSON.stringify(path.join(root, 'node_modules'))});` }, outfile: main, logLevel: 'silent' })
@@ -34,6 +34,7 @@ if (!process.versions.electron) {
   let window
   app.whenReady().then(async () => {
     handlers.registerIpc(() => {})
+    handlers.getDb().prepare('INSERT INTO daily_notes(day,person_id,body) VALUES (?,?,?)').run('2026-06-29','earlier-profile','Legacy partner note kept safely')
     // This bootstrap handler lives in main/index rather than registerIpc.
     ipcMain.handle(handlers.CH.appPlatform, () => process.platform)
     window = new BrowserWindow({ show: false, webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false } })
@@ -58,6 +59,11 @@ if (!process.versions.electron) {
       const goal = await api.goals.create({title:'Needle IPC goal',person_id:self});
       const searchable = await api.todos.create({title:'Needle IPC task',person_id:self,goal_id:goal.id,due_at:'2026-11-12T09:00'});
       await api.notes.set('2026-07-02','Needle IPC historic note',self);
+      await api.notes.set('2026-07-02','Partner IPC note',people[0].id);
+      await api.notes.set('2026-06-30','',people[0].id);
+      const noteHistory={mine:await api.notes.days(),partner:await api.notes.days(people[0].id),unassigned:(await api.notes.unassigned()).map(note=>({day:note.day,person_id:note.person_id,body_length:note.body_length})),original:(await api.notes.get('2026-06-29','earlier-profile')).body};
+      const invalidHistory=await api.notes.days(self,0).then(()=>false,()=>true);
+      const invalidUnassigned=await api.notes.unassigned(1001).then(()=>false,()=>true);
       const eventRule = await api.events.create({title:'Needle IPC event',person_id:self,starts_at:'2026-10-15T17:00',ends_at:'2026-10-15T18:00',recurrence:JSON.stringify({freq:'weekly',days:[4],startDate:'2026-10-15',endDate:'2026-11-26'})});
       const occurrence = (await api.events.day('2026-10-22',self)).find(e=>e.recur_parent===eventRule.id);
       const context = await api.events.seriesContext(occurrence.id);
@@ -82,7 +88,7 @@ if (!process.versions.electron) {
       const preview = await api.items.previewRemoval({kind:'events',fromDay:'2026-10-08',toDay:'2026-10-08',personId:self,title:'Local edit'});
       const removed = await api.items.removeRange({kind:'events',fromDay:'2026-10-08',toDay:'2026-10-08',personId:self,title:'Local edit',expectedIds:preview.events.map(e=>'events:'+e.id)});
       const after = await api.events.day('2026-10-08',self);
-      return {features,platform:await api.platform(),timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,selected,self,done:!!done.completed_at,reopened:!reopened.completed_at,future:future.some(t=>t.recur_parent===rule.id),safeConfig,elapsed,edited:edited.title,removed,after:after.length};
+      return {features,noteHistory,invalidHistory,invalidUnassigned,platform:await api.platform(),timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,selected,self,done:!!done.completed_at,reopened:!reopened.completed_at,future:future.some(t=>t.recur_parent===rule.id),safeConfig,elapsed,edited:edited.title,removed,after:after.length};
     })()`)
     assert.equal(result.platform, process.platform)
     assert.equal(result.timezone, 'Europe/Paris')
@@ -90,6 +96,9 @@ if (!process.versions.electron) {
     assert.equal(result.done, true)
     assert.equal(result.reopened, true)
     assert.equal(result.future, true)
+    assert.equal(result.invalidHistory, true)
+    assert.equal(result.invalidUnassigned, true)
+    assert.deepEqual(result.noteHistory,{mine:['2026-07-02'],partner:['2026-07-02'],unassigned:[{day:'2026-06-29',person_id:'earlier-profile',body_length:'Legacy partner note kept safely'.length}],original:'Legacy partner note kept safely'})
     assert.equal(result.safeConfig.password, undefined)
     assert.ok(result.elapsed < 500, `Local event creation waited ${result.elapsed} ms`)
     assert.equal(result.edited, 'Local edit')

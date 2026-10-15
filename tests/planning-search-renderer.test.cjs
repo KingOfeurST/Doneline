@@ -34,6 +34,8 @@ if (!process.versions.electron) {
       fixture.searchEvent=event('needle-event','Needle event',at('2026-11-11',15),at('2026-11-11',16));
       fixture.searchNote={day:'2026-07-04',person_id:'friend',body:'Needle note from the correct profile and day.',updated_at:at(today,8)};
       fixture.notesByKey={};fixture.notesByKey[fixture.searchNote.day+':friend']=fixture.searchNote.body;
+      fixture.unassignedNotes=[{day:'2026-10-08',person_id:'older-partner',updated_at:at(today,8),body_length:28}];
+      fixture.notesByKey['2026-10-08:older-partner']='Older partner note retained.';
       fixture.finishReschedule=(fail=false)=>{const pending=fixture.pendingReschedules.shift();if(!pending)throw Error('No pending reschedule');if(fail){pending.reject(Error('Fixture date save failed'));return;}const row=fixture.todos.find(t=>t.id===pending.id);Object.assign(row,pending.patch);pending.resolve({...row});};
       window.doneline.lifecycle={onPrepareQuit:()=>()=>{}};
       window.doneline.onTrayNewTodo=()=>()=>{};window.doneline.toggleFullscreen=async()=>true;
@@ -44,6 +46,7 @@ if (!process.versions.electron) {
       window.doneline.events.update=async(id,patch)=>{record('events.update',{id,...patch});return {...fixture.searchEvent,...patch};};
       window.doneline.search={query:async input=>{record('search.query',input);if(fixture.deferSearch)return new Promise(resolve=>fixture.pendingSearches.push({input,resolve}));if(!input.query.includes('needle'))return {todos:[],events:[],goals:[],notes:[]};return {todos:[{...fixture.todos.find(t=>t.id==='upcoming-task')}],events:[fixture.searchEvent],goals:[fixture.searchGoal],notes:[fixture.searchNote]};}};
       window.doneline.notes.get=async(day,personId)=>{record('notes.get',{day,personId});return {day,person_id:personId,body:fixture.notesByKey[day+':'+personId]||'',updated_at:at(today,8)};};
+      window.doneline.notes.days=async(personId)=>Object.keys(fixture.notesByKey).filter(key=>key.endsWith(':'+personId)&&fixture.notesByKey[key].trim()).map(key=>key.slice(0,10)).sort().reverse();
       window.doneline.notes.set=async(day,body,personId)=>{record('notes.set',{day,body,personId});fixture.notesByKey[day+':'+personId]=body;return {day,person_id:personId,body,updated_at:at(today,8)};};
     `
     require('esbuild').buildSync({ stdin: { contents: `import React from 'react';import {createRoot} from 'react-dom/client';import App from './src/renderer/src/App';createRoot(document.getElementById('root')).render(<App/>);`, loader: 'tsx', resolveDir: root }, bundle: true, platform: 'browser', format: 'iife', outfile: path.join(temporary, 'renderer.js'), define: { 'process.env.NODE_ENV': '"production"' } })
@@ -62,11 +65,35 @@ if (!process.versions.electron) {
     const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
     async function until(fn, description) { const deadline = Date.now() + 6000; while (Date.now() < deadline) { if (await evaluate(fn)) return; await wait(30) } throw Error('Timed out: ' + description + ' ' + await evaluate(() => JSON.stringify({errors:__fixture.errors,body:document.body.textContent.slice(-2500)}))) }
     const click = selector => evaluate(selector => { const button = document.querySelector(selector);if(!button)throw Error('Missing '+selector);button.click(); }, selector)
-    const input = (selector, value) => evaluate(({selector,value}) => { const element=document.querySelector(selector);if(!element)throw Error('Missing '+selector);const prototype=element instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(prototype,'value').set.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true})); }, {selector,value})
+    const input = (selector, value) => evaluate(({selector,value}) => { const element=document.querySelector(selector);if(!element)throw Error('Missing '+selector);const prototype=element instanceof HTMLTextAreaElement?HTMLTextAreaElement.prototype:element instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(prototype,'value').set.call(element,value);element.dispatchEvent(new Event('input',{bubbles:true}));if(element instanceof HTMLSelectElement)element.dispatchEvent(new Event('change',{bubbles:true})); }, {selector,value})
     const clickText = text => evaluate(text => { const scope=document.querySelector('[role="dialog"]')||document;const button=[...scope.querySelectorAll('button')].find(button=>button.textContent.trim()===text);if(!button)throw Error('Missing button '+text);button.click(); }, text)
     await until(() => document.querySelector('[aria-label="5 todos left"]'), 'planning load')
     const initial = await evaluate(() => [...document.querySelectorAll('[data-task-group]')].map(group=>({id:group.dataset.taskGroup,expanded:group.querySelector('button').getAttribute('aria-expanded'),count:group.querySelector('button span').textContent})))
     assert.deepEqual(initial, [{id:'today',expanded:'true',count:'2'},{id:'overdue',expanded:'true',count:'1'},{id:'upcoming',expanded:'false',count:'1'},{id:'undated',expanded:'false',count:'1'}])
+    const noteWritesBeforeHistory = await evaluate(() => __fixture.calls.filter(call=>call.method==='notes.set').length)
+    await until(() => document.querySelector('[aria-label="Notes date"]')?.value===__fixture.today, 'notes default to today')
+    await click('[aria-label="Previous note day"]')
+    await until(() => document.querySelector('[aria-label="Notes date"]').value!==__fixture.today, 'previous note day opens independently')
+    assert.deepEqual(await evaluate(() => [...document.querySelectorAll('[data-task-group]')].map(group=>({id:group.dataset.taskGroup,expanded:group.querySelector('button').getAttribute('aria-expanded'),count:group.querySelector('button span').textContent}))), initial, 'browsing note dates never changes task dates or groups')
+    await click('[aria-label="Show today\'s notes"]')
+    await until(() => document.querySelector('[aria-label="Notes date"]').value===__fixture.today, 'return to today notes')
+    await evaluate(() => [...document.querySelectorAll('button')].find(button=>button.querySelector('span')?.textContent==='🙂').click())
+    await evaluate(() => [...document.querySelectorAll('button')].find(button=>button.textContent.includes('combined')).click())
+    await until(() => document.querySelector('[aria-label="Saved note dates"] option[value="2026-07-04"]'), 'Both finds partner saved note history')
+    await input('[aria-label="Saved note dates"]','2026-07-04')
+    await until(() => document.querySelector('textarea[aria-label="Friend\'s note"]')?.value==='Needle note from the correct profile and day.', 'partner historical note is visible by date')
+    await evaluate(() => document.querySelector('[aria-label="Note history"]').scrollIntoView({block:'start'}))
+    await wait(400)
+    fs.writeFileSync(path.join(os.tmpdir(),'doneline-note-history.png'),(await win.capturePage()).toPNG())
+    await evaluate(() => [...document.querySelectorAll('button')].find(button=>button.querySelector('span.text-sm.font-bold')?.textContent==='Both').click())
+    await evaluate(() => [...document.querySelectorAll('button')].find(button=>button.textContent.trim()==='🙂Chris').click())
+    await until(() => document.querySelector('textarea[aria-label="Chris\'s note"]')&&!document.querySelector('textarea[aria-label="Friend\'s note"]'), 'single-profile note keeps owner label')
+    await click('[aria-label="Show today\'s notes"]')
+    await evaluate(() => [...document.querySelectorAll('summary')].find(summary=>summary.textContent.includes('Notes from older profiles (1)')).click())
+    await click('[aria-label="Older profile note dates"] button')
+    await until(() => document.querySelector('[aria-label="Older profile note"]')?.value==='Older partner note retained.', 'missing-owner note remains discoverable under own profile filter')
+    assert.equal(await evaluate(() => document.querySelector('[aria-label="Older profile note"]').readOnly), true)
+    assert.equal(await evaluate(() => __fixture.calls.filter(call=>call.method==='notes.set').length), noteWritesBeforeHistory, 'history and older-profile browsing never save or reassign notes')
     assert.equal(await evaluate(() => !!document.querySelector('[data-task-group="upcoming"] [aria-label="Mark done"]')), false)
     await click('[aria-label="Reschedule Overdue task"]')
     await clickText('Tomorrow')

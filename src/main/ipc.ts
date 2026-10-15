@@ -56,6 +56,8 @@ import {
   nudgeWasSeen,
   getDailyNote,
   setDailyNote,
+  listNoteDays,
+  listUnassignedNotes,
   sendFocusInvite,
   pendingInvitesFor,
   markInviteSeen,
@@ -394,6 +396,10 @@ export function registerIpc(onWorkspaceChange: () => void): void {
   handle(CH.notesGet, (_e, day: string, personId?: string) =>
     getDailyNote(day, personId ?? (getSelfPersonId() ?? primaryPersonId()))
   )
+  handle(CH.notesDays, (_e, personId?: string, limit?: number) =>
+    listNoteDays(personId ?? (getSelfPersonId() ?? primaryPersonId()), limit)
+  )
+  handle(CH.notesUnassigned, (_e, limit?: number) => listUnassignedNotes(limit))
   handle(CH.notesSet, (_e, day: string, body: string, personId?: string) => {
     const n = setDailyNote(day, body, personId ?? (getSelfPersonId() ?? primaryPersonId()))
     push()

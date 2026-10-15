@@ -8,7 +8,7 @@ import AddTodoModal from '../components/AddTodoModal'
 import AddEventModal from '../components/AddEventModal'
 import FocusStatsCard from '../components/FocusStatsCard'
 import QuickAdd from '../components/QuickAdd'
-import DailyNote from '../components/DailyNote'
+import DailyNotesPanel from '../components/DailyNotesPanel'
 import { fmtDayLabel } from '../lib/format'
 import { useTodoCompletion } from '../lib/useTodoCompletion'
 import { groupTasks, rescheduledDue, TASK_GROUPS, type TaskGroup } from '../lib/taskPlanning'
@@ -18,8 +18,6 @@ import { notifyDeleted } from '../lib/deletionUndo'
 export default function TodayView() {
   const { active, people, self, queryPersonId, defaultOwnerId, personById, tick } = useProfile()
   const combined = active === 'all'
-  // Whose note to show when a single profile is selected: that profile.
-  const noteOwnerId = combined ? undefined : active || self
   const [today, setToday] = useState('')
   const [todos, setTodos] = useState<TodoWithGoal[]>([])
   const [events, setEvents] = useState<CalEvent[]>([])
@@ -296,20 +294,7 @@ export default function TodayView() {
         </button>
       </section>
 
-        {today && (
-          <div className="space-y-5 lg:sticky lg:top-6">
-            {/* Notes follow the profile switcher. In the combined view both are
-                shown, so a note written for the other person is visible here
-                and on their machine after the next sync. */}
-            {combined ? (
-              people.map((p) => (
-                <DailyNote key={p.id} day={today} personId={p.id} owner={p} compact={people.length > 1} />
-              ))
-            ) : (
-              noteOwnerId && <DailyNote day={today} personId={noteOwnerId} />
-            )}
-          </div>
-        )}
+        {today && <DailyNotesPanel today={today} />}
       </div>
 
       <AddTodoModal

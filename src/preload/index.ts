@@ -26,7 +26,9 @@ const api: DonelineAPI = {
 
   notes: {
     get: (day, personId) => ipcRenderer.invoke(CH.notesGet, day, personId),
-    set: (day, body, personId) => ipcRenderer.invoke(CH.notesSet, day, body, personId)
+    set: (day, body, personId) => ipcRenderer.invoke(CH.notesSet, day, body, personId),
+    days: (personId, limit) => ipcRenderer.invoke(CH.notesDays, personId, limit),
+    unassigned: (limit) => ipcRenderer.invoke(CH.notesUnassigned, limit)
   },
 
   search: { query: (input) => ipcRenderer.invoke(CH.searchQuery, input) },

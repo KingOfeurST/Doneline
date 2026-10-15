@@ -62,6 +62,7 @@ import {
   getDailyNote,
   setDailyNote,
   listNoteDays,
+  listUnassignedNotes,
   updatePerson,
   listTrash,
   restoreTrash,
@@ -670,6 +671,13 @@ registerTool(
   async ({ person_id, limit }) => {
     return text(listNoteDays(person_id ?? selfId(), limit ?? 30))
   }
+)
+
+registerTool(
+  'list_unassigned_notes',
+  'List metadata only for preserved notes whose original profile is missing. Returns day, person_id, updated_at and body_length without note bodies or changes. Read one with get_note using its exact day and original person_id. Do not guess the former owner or reassign these notes without the user identifying them.',
+  { limit: z.number().int().min(1).max(1000).default(100).describe('Maximum metadata rows, newest dates first (default 100)') },
+  async ({ limit }) => text(listUnassignedNotes(limit))
 )
 
 // ---- Workspace control and planning ----

@@ -93,6 +93,8 @@ export const CH = {
 
   notesGet: 'notes:get',
   notesSet: 'notes:set',
+  notesDays: 'notes:days',
+  notesUnassigned: 'notes:unassigned',
   quitReady: 'app:quitReady',
 
   today: 'app:today',

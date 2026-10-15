@@ -20,12 +20,14 @@ import type { WorkspaceSyncStatus } from '../../core/db.js'
 import type { BackupInfo } from '../../core/backups.js'
 import type { TrashItem, RestoreTrashResult } from '../../core/trash.js'
 import type { EventEditScope, EventSeriesContext, EventEditPatch } from '../../core/eventSeries.js'
+import type { UnassignedNoteSummary } from '../../core/notes.js'
 export type { RemovalRange } from '../../core/rangeRemoval.js'
 export type { SearchInput, SearchResults } from '../../core/search.js'
 export type { WorkspaceSyncStatus } from '../../core/db.js'
 export type { BackupInfo } from '../../core/backups.js'
 export type { TrashItem, RestoreTrashResult } from '../../core/trash.js'
 export type { EventEditScope, EventSeriesContext, EventEditPatch } from '../../core/eventSeries.js'
+export type { UnassignedNoteSummary } from '../../core/notes.js'
 
 export interface DeleteReceipt { trashId: string | null }
 
@@ -92,6 +94,10 @@ export interface DonelineAPI {
   notes: {
     get(day: string, personId?: string): Promise<DailyNote>
     set(day: string, body: string, personId?: string): Promise<DailyNote>
+    /** Non-empty note dates, newest first; defaults to this device's profile. */
+    days(personId?: string, limit?: number): Promise<string[]>
+    /** Metadata for preserved notes without a current profile; never reassigns them. */
+    unassigned(limit?: number): Promise<UnassignedNoteSummary[]>
   }
 
   search: { query(input: SearchInput): Promise<SearchResults> }

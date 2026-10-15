@@ -147,6 +147,10 @@ selected profile as the desktop app. Codex, Claude, or another MCP client can
 read, plan, add, change, finish, and remove tasks, events, goals, and daily notes.
 Changes save locally first; cloud sync retries in the background. The open app
 refreshes when another process writes, including in local-only or offline mode.
+Notes include date navigation and saved-date history. Notes kept under older
+profiles remain readable in a separate section, with their originals preserved.
+The MCP tool `list_unassigned_notes` exposes their dates and source IDs for
+explicit recovery after identifying the owner.
 
 Build it once:
 

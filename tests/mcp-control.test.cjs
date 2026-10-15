@@ -116,6 +116,66 @@ test('MCP discovery exposes complete control schemas and profile changes survive
   await s.close()
 })
 
+test('unassigned-note discovery preserves unknown owners and reads their exact source without writes', async () => {
+  const location = workspace()
+  const s = await connect(location)
+  const people = await s.tool('list_people')
+  const tools = (await s.client.listTools()).tools
+  const definition = tools.find(tool => tool.name === 'list_unassigned_notes')
+  assert.ok(definition, 'Assistants must discover preserved notes even when their original profile is absent')
+  assert.equal(definition.annotations.readOnlyHint, true)
+  assert.equal(definition.annotations.destructiveHint, false)
+  assert.equal(definition.annotations.openWorldHint, false)
+
+  const originalOwner = 'former-profile-a'
+  const otherOriginalOwner = 'former-profile-b'
+  const sourceBody = 'Shopping list café 🌙\nKeep this original text.'
+  const otherBody = 'A separate note on the same day.'
+  const updatedAt = '2026-10-15T10:00:00Z'
+  const independent = new Database(location.database)
+  try {
+    const insert = independent.prepare('INSERT INTO daily_notes(day,person_id,body,updated_at) VALUES (?,?,?,?)')
+    insert.run('2026-10-15', originalOwner, sourceBody, updatedAt)
+    insert.run('2026-10-15', otherOriginalOwner, otherBody, updatedAt)
+    insert.run('2026-10-14', originalOwner, '', updatedAt)
+    insert.run('2026-10-13', originalOwner, '   ', updatedAt)
+    insert.run('2026-10-15', people[0].id, 'A current profile already owns this note.', updatedAt)
+    const snapshot = () => independent.prepare('SELECT day,person_id,body,updated_at FROM daily_notes ORDER BY day,person_id').raw().all()
+    const before = snapshot()
+    const beforeRevision = independent.prepare('PRAGMA data_version').get().data_version
+
+    const response = await s.raw('list_unassigned_notes')
+    assert.notEqual(response.isError, true)
+    assert.equal(response.structuredContent.local_receipt, undefined, 'Metadata inspection must not claim a write')
+    const summaries = JSON.parse(response.content[0].text)
+    assert.deepEqual(response.structuredContent.result, summaries)
+    assert.equal(summaries.length, 2, 'Current owners, empty notes and blank notes are excluded')
+    assert.deepEqual(summaries.map(note => note.person_id), [originalOwner, otherOriginalOwner], 'Keep distinct original identities even on the same date')
+    for (const summary of summaries) {
+      assert.deepEqual(Object.keys(summary).sort(), ['body_length', 'day', 'person_id', 'updated_at'])
+      assert.equal(summary.day, '2026-10-15')
+      assert.equal(summary.updated_at, updatedAt)
+      assert.ok(summary.body_length > 0)
+    }
+    assert.ok(!JSON.stringify(response).includes('Shopping list'), 'Discovery exposes metadata instead of note bodies')
+    assert.equal((await s.tool('list_unassigned_notes', { limit: 1 })).length, 1)
+
+    const source = await s.raw('get_note', { day: summaries[0].day, person_id: summaries[0].person_id })
+    assert.notEqual(source.isError, true)
+    assert.equal(source.structuredContent.local_receipt, undefined)
+    assert.equal(source.structuredContent.result.person_id, originalOwner)
+    assert.equal(source.structuredContent.result.body, sourceBody, 'Explicit inspection reads the original note, never a current profile fallback')
+    const otherSource = await s.tool('get_note', { day: '2026-10-15', person_id: otherOriginalOwner })
+    assert.equal(otherSource.body, otherBody)
+    await s.error('list_unassigned_notes', { limit: 0 }, /limit|greater|1/i)
+    await s.error('list_unassigned_notes', { limit: 1001 }, /limit|1000|less/i)
+    assert.deepEqual(snapshot(), before, 'Read-only discovery and source inspection must preserve every original row')
+    assert.equal(independent.prepare('PRAGMA data_version').get().data_version, beforeRevision, 'Read-only tools must not perform database writes')
+    assert.deepEqual((await s.tool('list_people')).map(person => person.id), people.map(person => person.id), 'Inspection must not create replacement profiles')
+  } finally { independent.close() }
+  await s.close()
+})
+
 test('task, goal, event, notes and accent-insensitive search retain exact values across processes', async () => {
   const location = workspace()
   let s = await connect(location)

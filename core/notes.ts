@@ -3,6 +3,14 @@ import { getPerson, primaryPersonId } from './people.js'
 import { parseLocalDate } from './recurrenceRules.js'
 import type { DailyNote } from './types.js'
 
+/** Saved note metadata whose original owner is absent from this workspace. */
+export interface UnassignedNoteSummary {
+  day: string
+  person_id: string
+  updated_at: string
+  body_length: number
+}
+
 /** The note for one day and person. Returns an empty note rather than undefined
  *  so callers can bind a textarea straight to `body`. */
 export function getDailyNote(day: string, personId?: string): DailyNote {
@@ -30,7 +38,7 @@ export function setDailyNote(day: string, body: string, personId?: string): Dail
   return getDailyNote(day, pid)
 }
 
-/** Days that have a non-empty note, newest first — for a future history view. */
+/** Days that have a non-empty note, newest first, for note history navigation. */
 export function listNoteDays(personId?: string, limit = 30): string[] {
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('Note history limit must be from 1 to 1000.')
   const pid = personId || primaryPersonId()
@@ -42,4 +50,17 @@ export function listNoteDays(personId?: string, limit = 30): string[] {
     )
     .all(pid, limit) as Array<{ day: string }>
   return rows.map((r) => r.day)
+}
+
+/** Preserve orphaned notes for explicit inspection without guessing an owner. */
+export function listUnassignedNotes(limit = 100): UnassignedNoteSummary[] {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw new Error('Unassigned note limit must be from 1 to 1000.')
+  return getDb().prepare(`
+    SELECT n.day, n.person_id, n.updated_at, LENGTH(n.body) AS body_length
+    FROM daily_notes n
+    WHERE TRIM(n.body) != ''
+      AND NOT EXISTS (SELECT 1 FROM people p WHERE p.id = n.person_id)
+    ORDER BY n.day DESC, n.person_id
+    LIMIT ?
+  `).all(limit) as UnassignedNoteSummary[]
 }

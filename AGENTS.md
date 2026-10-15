@@ -27,6 +27,11 @@ same as the desktop app; `--data-dir` chooses a separate workspace.
   weekdays and bounds are managed in Apple Calendar.
 - Append notes with `append_note`. Read a note before replacing its full body
   with `set_note`. Use `delete_note` only for requested clearing.
+- When shared notes seem missing, run `sync_workspace` before concluding they
+  are absent. Check `list_note_days` for past dates and `list_unassigned_notes`
+  for notes kept under older profile IDs. Read those with their exact source
+  day/person ID. Confirm unclear ownership before copying to a current profile;
+  create a safety backup and preserve the original source notes.
 - Task/event deletion moves items to Trash; retain the returned `trash_id` for
   Undo with `restore_trash`. Range removal must first obtain a preview and pass
   its exact `expected_ids`. An authorized, unambiguous removal request does not
